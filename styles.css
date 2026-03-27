@@ -1687,6 +1687,13 @@ body.light .btn-secondary {
 }
 
 /* ------------------------------------------------------------
+   ATTACHMENT UPLOAD
+   ------------------------------------------------------------ */
+.attachment-upload-label { display: flex; align-items: center; cursor: pointer; }
+.attachment-upload-btn { display: inline-flex; align-items: center; gap: 4px; padding: 6px 14px; border: 1px dashed var(--border); border-radius: var(--radius); font-size: 13px; color: var(--text2); background: var(--bg2); cursor: pointer; transition: border-color .15s, background .15s; }
+.attachment-upload-label:hover .attachment-upload-btn { border-color: var(--accent); background: var(--bg3); color: var(--accent); }
+
+/* ------------------------------------------------------------
    FORM ELEMENTS
    ------------------------------------------------------------ */
 input,

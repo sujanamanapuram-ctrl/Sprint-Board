@@ -15,15 +15,38 @@ try {
     console.log('Installing nodemailer...');
     execSync('npm install nodemailer', { cwd: __dirname, stdio: 'inherit' });
     nodemailer = require('nodemailer');
-    console.log('nodemailer installed successfully');
-  } catch(err) {
-    console.error('Could not install nodemailer:', err.message);
-  }
+  } catch(err) { console.error('Could not install nodemailer:', err.message); }
+}
+
+// Install multer if not present
+let multer;
+try {
+  multer = require('multer');
+} catch(e) {
+  try {
+    console.log('Installing multer...');
+    execSync('npm install multer', { cwd: __dirname, stdio: 'inherit' });
+    multer = require('multer');
+    console.log('multer installed');
+  } catch(err) { console.error('Could not install multer:', err.message); }
 }
 
 const app = express();
 app.use(express.json());
 app.use(express.static(__dirname));
+
+// Serve uploaded files
+const fs = require('fs');
+const uploadsDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+app.use('/uploads', express.static(uploadsDir));
+
+// Multer storage config — max 500 MB
+const storage = multer ? multer.diskStorage({
+  destination: (req, file, cb) => cb(null, uploadsDir),
+  filename: (req, file, cb) => cb(null, uid() + '-' + file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_'))
+}) : null;
+const upload = multer ? multer({ storage, limits: { fileSize: 500 * 1024 * 1024 } }) : null;
 
 const pool = process.env.DATABASE_URL
   ? new Pool({ connectionString: process.env.DATABASE_URL, ssl: process.env.DATABASE_URL.includes('localhost') ? false : { rejectUnauthorized: false } })
@@ -279,7 +302,7 @@ app.get('/api/issues/:id', wrap(async (req, res) => {
     LEFT JOIN issues p ON p.id=i.parent_id
     WHERE i.id=$1`, [id])).rows[0];
   if (!issue) return res.status(404).json({ error: 'Issue not found' });
-  const [worklogs, comments, links, subtasks, cfv, history] = await Promise.all([
+  const [worklogs, comments, links, subtasks, cfv, history, attachments] = await Promise.all([
     q(`SELECT w.*, u.name AS user_name, u.color AS user_color FROM worklogs w
       LEFT JOIN users u ON u.id=w.user_id WHERE w.issue_id=$1 ORDER BY w.created_at DESC`, [id]),
     q(`SELECT c.*, u.name AS user_name, u.avatar_url, u.color AS user_color
@@ -293,7 +316,9 @@ app.get('/api/issues/:id', wrap(async (req, res) => {
     q(`SELECT v.*, f.name AS field_name, f.field_type
       FROM issue_field_values v JOIN custom_fields f ON f.id=v.field_id WHERE v.issue_id=$1`, [id]),
     q(`SELECT h.*, u.name AS user_name, u.color AS user_color
-      FROM issue_history h LEFT JOIN users u ON u.id=h.user_id WHERE h.issue_id=$1 ORDER BY h.created_at DESC`, [id])
+      FROM issue_history h LEFT JOIN users u ON u.id=h.user_id WHERE h.issue_id=$1 ORDER BY h.created_at DESC`, [id]),
+    q(`SELECT a.*, u.name AS uploader_name FROM issue_attachments a
+      LEFT JOIN users u ON u.id=a.uploaded_by WHERE a.issue_id=$1 ORDER BY a.created_at DESC`, [id])
   ]);
   issue.worklogs = worklogs.rows;
   issue.comments = comments.rows;
@@ -301,6 +326,7 @@ app.get('/api/issues/:id', wrap(async (req, res) => {
   issue.subtasks = subtasks.rows;
   issue.custom_field_values = cfv.rows;
   issue.history = history.rows;
+  issue.attachments = attachments.rows;
   res.json(issue);
 }));
 
@@ -435,6 +461,40 @@ app.post('/api/links', wrap(async (req, res) => {
 
 app.delete('/api/links/:id', wrap(async (req, res) => {
   await q('DELETE FROM issue_links WHERE id=$1', [req.params.id]);
+  res.json({ ok: true });
+}));
+
+// ── Attachments ───────────────────────────────────────────
+app.get('/api/issues/:id/attachments', wrap(async (req, res) => {
+  const r = await q(`SELECT a.*, u.name AS uploader_name FROM issue_attachments a
+    LEFT JOIN users u ON u.id=a.uploaded_by WHERE a.issue_id=$1 ORDER BY a.created_at DESC`, [req.params.id]);
+  res.json(r.rows);
+}));
+
+app.post('/api/issues/:id/attachments', requireAuth, (req, res, next) => {
+  if (!upload) return res.status(503).json({ error: 'File upload not available' });
+  upload.array('files', 20)(req, res, async (err) => {
+    if (err) return res.status(400).json({ error: err.message });
+    try {
+      const saved = [];
+      for (const f of req.files) {
+        const r = await q(`INSERT INTO issue_attachments(id,issue_id,filename,original_name,size,mime_type,uploaded_by)
+          VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+          [uid(), req.params.id, f.filename, f.originalname, f.size, f.mimetype, req.user.user_id]);
+        saved.push(r.rows[0]);
+      }
+      res.status(201).json(saved);
+    } catch(e) { next(e); }
+  });
+});
+
+app.delete('/api/attachments/:id', requireAuth, wrap(async (req, res) => {
+  const a = (await q('SELECT * FROM issue_attachments WHERE id=$1', [req.params.id])).rows[0];
+  if (!a) return res.status(404).json({ error: 'Not found' });
+  if (a.uploaded_by !== req.user.user_id && req.user.role !== 'admin' && req.user.role !== 'owner')
+    return res.status(403).json({ error: 'Cannot delete another user\'s attachment' });
+  try { fs.unlinkSync(path.join(uploadsDir, a.filename)); } catch(_) {}
+  await q('DELETE FROM issue_attachments WHERE id=$1', [req.params.id]);
   res.json({ ok: true });
 }));
 
@@ -967,6 +1027,20 @@ process.on('unhandledRejection', (reason) => {
     try {
       await pool.query(`ALTER TABLE worklogs ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW()`);
     } catch(e) {}
+
+    // Migration: create issue_attachments table
+    try {
+      await pool.query(`CREATE TABLE IF NOT EXISTS issue_attachments (
+        id VARCHAR PRIMARY KEY,
+        issue_id VARCHAR REFERENCES issues(id) ON DELETE CASCADE,
+        filename VARCHAR NOT NULL,
+        original_name VARCHAR NOT NULL,
+        size BIGINT DEFAULT 0,
+        mime_type VARCHAR,
+        uploaded_by VARCHAR REFERENCES users(id) ON DELETE SET NULL,
+        created_at TIMESTAMP DEFAULT NOW()
+      )`);
+    } catch(e) { console.error('Migration warning (issue_attachments):', e.message); }
 
     // Migration: add email_settings column to organizations
     try {

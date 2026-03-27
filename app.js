@@ -2071,6 +2071,39 @@ function toggleCustomFieldOptions() {
 
 $('customFieldType').addEventListener('change', toggleCustomFieldOptions);
 
+// Show selected file names in Create Issue modal
+document.addEventListener('change', function(e) {
+  if (e.target.id === 'issueAttachments') {
+    var names = $('attachmentFileNames');
+    if (!names) return;
+    var files = e.target.files;
+    if (!files.length) { names.textContent = 'No files chosen'; return; }
+    names.textContent = files.length === 1 ? files[0].name : files.length + ' files selected';
+  }
+});
+
+// Drawer attachment upload handler
+document.addEventListener('change', function(e) {
+  if (e.target.id === 'drawerAttachmentInput' && S.drawerIssueId) {
+    var files = e.target.files;
+    if (!files.length) return;
+    var fd = new FormData();
+    for (var i = 0; i < files.length; i++) fd.append('files', files[i]);
+    toast('Uploading…');
+    fetch('/api/issues/' + S.drawerIssueId + '/attachments', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + getAuthToken() },
+      body: fd
+    }).then(function(r) { return r.json(); }).then(function() {
+      toast('Attachment uploaded');
+      api('/api/issues/' + S.drawerIssueId).then(function(issue) {
+        if (issue) renderDrawerAttachments(issue.attachments || []);
+      });
+    }).catch(function() { toast('Upload failed', 'error'); });
+    e.target.value = '';
+  }
+});
+
 $('customFieldForm').addEventListener('submit', async function (e) {
   e.preventDefault();
   var id = $('customFieldId').value;
@@ -2181,6 +2214,7 @@ async function openDrawer(issueId) {
   if (actBody) actBody.dataset.activeTab = 'all';
   renderDrawerActivity(issue);
   renderDrawerCustomFields(issue.custom_field_values || []);
+  renderDrawerAttachments(issue.attachments || []);
 
   $('drawerCreated').textContent = fmtDateTime(issue.created_at);
   $('drawerUpdated').textContent = fmtDateTime(issue.updated_at);
@@ -2688,6 +2722,55 @@ function _renderActivityTab(tab, issue) {
   c.innerHTML = html || '<p class="text-muted text-sm" style="padding:12px 0">No activity yet.</p>';
 }
 
+function renderDrawerAttachments(attachments) {
+  var c = $('drawerAttachments');
+  if (!c) return;
+  if (!attachments || !attachments.length) {
+    c.innerHTML = '<p class="text-muted text-sm" style="padding:8px 0">No attachments yet.</p>';
+    return;
+  }
+  function fileIcon(mime) {
+    if (!mime) return '📄';
+    if (mime.startsWith('image/')) return '🖼️';
+    if (mime.includes('pdf')) return '📕';
+    if (mime.includes('word') || mime.includes('document')) return '📝';
+    if (mime.includes('excel') || mime.includes('sheet')) return '📊';
+    if (mime.includes('zip') || mime.includes('compressed')) return '🗜️';
+    if (mime.includes('video/')) return '🎬';
+    return '📄';
+  }
+  function fmtSize(bytes) {
+    if (!bytes) return '';
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024*1024) return (bytes/1024).toFixed(1) + ' KB';
+    return (bytes/1024/1024).toFixed(1) + ' MB';
+  }
+  var html = '';
+  attachments.forEach(function(a) {
+    var canDelete = S.currentUser === a.uploaded_by || ((S.currentUserObj||{}).role === 'admin') || ((S.currentUserObj||{}).role === 'owner');
+    html += '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)">' +
+      '<span style="font-size:18px">' + fileIcon(a.mime_type) + '</span>' +
+      '<div style="flex:1;min-width:0">' +
+      '<a href="/uploads/' + esc(a.filename) + '" target="_blank" download="' + esc(a.original_name) + '" style="font-size:13px;color:var(--accent);text-decoration:none;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(a.original_name) + '</a>' +
+      '<div style="font-size:11px;color:var(--text3)">' + fmtSize(a.size) + (a.uploader_name ? ' · ' + esc(a.uploader_name) : '') + ' · ' + fmtDateTime(a.created_at) + '</div>' +
+      '</div>' +
+      (canDelete ? '<button class="btn btn-sm btn-outline text-danger" style="padding:2px 8px;font-size:11px" onclick="deleteAttachment(\'' + a.id + '\')">✕</button>' : '') +
+      '</div>';
+  });
+  c.innerHTML = html;
+}
+
+window.deleteAttachment = async function(id) {
+  var ok = await confirmDialog('Delete this attachment?');
+  if (!ok) return;
+  try {
+    await api('/api/attachments/' + id, 'DELETE');
+    var issue = await api('/api/issues/' + S.drawerIssueId);
+    if (issue) renderDrawerAttachments(issue.attachments || []);
+    toast('Attachment deleted');
+  } catch(e) {}
+};
+
 function renderDrawerCustomFields(cfValues) {
   var c = $('drawerCustomFields');
   if (!cfValues || !cfValues.length) { c.innerHTML = ''; return; }
@@ -2859,7 +2942,7 @@ async function handleIssueSubmit(e) {
     start_date: $('issueStartDate').value || null,
     due_date: $('issueDueDate').value || null,
     description: $('issueDescription').value,
-    original_estimate: parseEstimate($('issueEstimate').value),
+    original_estimate: $('issueEstimate') ? parseEstimate($('issueEstimate').value) : 0,
     status: 'To Do'
   };
   if (parentId) payload.parent_id = parentId;
@@ -2872,10 +2955,25 @@ async function handleIssueSubmit(e) {
     await refreshData();
     renderCurrentView();
   } else {
+    var submitBtn = $('issueSubmitBtn');
+    if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Saving…'; }
     var created = await api('/api/issues', 'POST', payload);
+    // Upload any attached files
+    var fileInput = $('issueAttachments');
+    if (created && created.id && fileInput && fileInput.files.length) {
+      var fd = new FormData();
+      for (var i = 0; i < fileInput.files.length; i++) fd.append('files', fileInput.files[i]);
+      try {
+        await fetch('/api/issues/' + created.id + '/attachments', {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + getAuthToken() },
+          body: fd
+        });
+      } catch(e) { toast('Issue created but attachments failed to upload', 'warning'); }
+    }
+    if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Save'; }
     closeModal('modal-issue');
     await refreshData();
-    // If it's a subtask, refresh the parent drawer and open subtask in new tab
     if (parentId && S.drawerIssueId === parentId) {
       var parentIssue = await api('/api/issues/' + parentId);
       renderDrawerSubtasks(parentIssue.subtasks || []);

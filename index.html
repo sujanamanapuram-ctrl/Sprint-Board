@@ -357,6 +357,21 @@
               </div>
             </div>
 
+            <!-- Attachments section -->
+            <div class="drawer-section">
+              <div class="drawer-section-header">
+                <span class="drawer-section-toggle">▾</span>
+                <h3 class="drawer-section-title">Attachments</h3>
+                <label class="btn btn-outline btn-sm" style="margin-left:auto;cursor:pointer;font-size:11px">
+                  📎 Add
+                  <input type="file" id="drawerAttachmentInput" multiple style="display:none">
+                </label>
+              </div>
+              <div class="drawer-section-body">
+                <div id="drawerAttachments"></div>
+              </div>
+            </div>
+
             <!-- Activity section -->
             <div class="drawer-section drawer-activity-section">
               <div class="drawer-section-header">
@@ -611,11 +626,19 @@
             <label class="form-label" for="issueDescription">Description</label>
             <textarea id="issueDescription" class="input" rows="4"></textarea>
           </div>
+          <div class="form-group">
+            <label class="form-label">Attachments <span style="font-size:11px;color:var(--text3);font-weight:400">(max 500 MB per file)</span></label>
+            <label class="attachment-upload-label" id="attachmentUploadLabel">
+              <input type="file" id="issueAttachments" multiple style="display:none">
+              <span class="attachment-upload-btn">📎 Choose Files</span>
+              <span id="attachmentFileNames" style="font-size:12px;color:var(--text3);margin-left:8px">No files chosen</span>
+            </label>
+          </div>
         </form>
       </div>
       <div class="modal-footer">
         <button class="btn btn-secondary" onclick="closeModal('modal-issue')">Cancel</button>
-        <button class="btn btn-primary" type="submit" form="issueForm">Save</button>
+        <button class="btn btn-primary" id="issueSubmitBtn" type="submit" form="issueForm">Save</button>
       </div>
     </div>
   </div>

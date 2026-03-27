@@ -1,0 +1,4022 @@
+// ═══════════════════════════════════════════════════════════
+// SPRINTBOARD ENTERPRISE — SPA CORE LOGIC
+// ═══════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════════════════
+const S = {
+  data: null,
+  currentUser: null,
+  currentSpace: null,
+  currentView: 'home',
+  currentTab: null,
+  drawerIssueId: null,
+  calendarDate: new Date(),
+  calendarView: 'month',
+  allWorkSort: { col: 'updated_at', dir: 'desc' },
+  allWorkSelected: new Set(),
+  yourWorkTab: 'assigned',
+};
+
+// ═══════════════════════════════════════════════════════════
+// HELPERS
+// ═══════════════════════════════════════════════════════════
+const $ = (id) => document.getElementById(id);
+const qs = (sel) => document.querySelector(sel);
+const qsa = (sel) => document.querySelectorAll(sel);
+const cap = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
+const visLabel = (v) => ({ private: 'Private', team: 'Team', org: 'Organization' }[v] || cap(v || 'private'));
+const esc = (str) => {
+  if (!str) return '';
+  const d = document.createElement('div');
+  d.textContent = String(str);
+  return d.innerHTML;
+};
+
+function fmtMins(mins) {
+  if (!mins || mins <= 0) return '0h';
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  if (h && m) return h + 'h ' + m + 'm';
+  if (h) return h + 'h';
+  return m + 'm';
+}
+
+function fmtDate(d) {
+  if (!d) return '\u2014';
+  const dt = new Date(d);
+  if (isNaN(dt.getTime())) return '\u2014';
+  return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function fmtDateTime(d) {
+  if (!d) return '\u2014';
+  const dt = new Date(d);
+  if (isNaN(dt.getTime())) return '\u2014';
+  return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) +
+    ' ' + dt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+}
+
+function fmtDateShort(d) {
+  if (!d) return '';
+  const dt = new Date(d);
+  if (isNaN(dt.getTime())) return '';
+  return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+function fmtDateISO(d) {
+  if (!d) return '';
+  const dt = new Date(d);
+  if (isNaN(dt.getTime())) return '';
+  return dt.toISOString().split('T')[0];
+}
+
+function initials(name) {
+  if (!name) return '?';
+  return name.split(' ').map(function (w) { return w[0]; }).join('').toUpperCase().slice(0, 2);
+}
+
+function relativeTime(d) {
+  if (!d) return '';
+  var diff = Date.now() - new Date(d).getTime();
+  var mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return mins + 'm ago';
+  var hrs = Math.floor(mins / 60);
+  if (hrs < 24) return hrs + 'h ago';
+  var days = Math.floor(hrs / 24);
+  if (days < 30) return days + 'd ago';
+  return fmtDate(d);
+}
+
+function parseEstimate(str) {
+  if (!str) return 0;
+  var total = 0;
+  var hMatch = str.match(/(\d+)\s*h/i);
+  var mMatch = str.match(/(\d+)\s*m/i);
+  if (hMatch) total += parseInt(hMatch[1], 10) * 60;
+  if (mMatch) total += parseInt(mMatch[1], 10);
+  if (!hMatch && !mMatch) {
+    var n = parseFloat(str);
+    if (!isNaN(n)) total = Math.round(n * 60);
+  }
+  return total;
+}
+
+// ═══════════════════════════════════════════════════════════
+// API WRAPPER
+// ═══════════════════════════════════════════════════════════
+function getAuthToken() { return localStorage.getItem('sb-token') || ''; }
+
+async function api(url, method, body) {
+  method = method || 'GET';
+  try {
+    var token = getAuthToken();
+    var headers = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = 'Bearer ' + token;
+    var opts = { method: method, headers: headers };
+    if (body !== undefined && body !== null) opts.body = JSON.stringify(body);
+    var res = await fetch(url, opts);
+    if (res.status === 401) {
+      localStorage.removeItem('sb-token');
+      localStorage.removeItem('sb-user');
+      window.location.href = '/login.html';
+      return;
+    }
+    if (!res.ok) {
+      var err;
+      try { err = await res.json(); } catch (_) { err = {}; }
+      throw new Error(err.error || res.statusText);
+    }
+    if (res.status === 204) return null;
+    return await res.json();
+  } catch (e) {
+    if (e.message && e.message.includes('redirect')) return;
+    toast(e.message || 'API request failed', 'error');
+    throw e;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// TOAST NOTIFICATIONS
+// ═══════════════════════════════════════════════════════════
+function toast(msg, type) {
+  type = type || 'success';
+  var c = $('toastContainer');
+  var el = document.createElement('div');
+  el.className = 'toast toast-' + type;
+  var icon = type === 'error' ? '✕' : type === 'warning' ? '⚠️' : '✓';
+  el.innerHTML = '<span class="toast-icon">' + icon + '</span><span class="toast-msg">' + msg + '</span>';
+  c.appendChild(el);
+  setTimeout(function () { el.classList.add('toast-fade'); }, 3000);
+  setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 3600);
+}
+
+function popupAlert(title, msg, type) {
+  type = type || 'success';
+  var c = $('toastContainer');
+  var el = document.createElement('div');
+  el.className = 'popup-alert popup-alert-' + type;
+  var icon = type === 'error' ? '❌' : type === 'warning' ? '⚠️' : type === 'info' ? 'ℹ️' : '✅';
+  el.innerHTML =
+    '<div class="popup-alert-icon">' + icon + '</div>' +
+    '<div class="popup-alert-body">' +
+    '<div class="popup-alert-title">' + title + '</div>' +
+    '<div class="popup-alert-msg">' + msg + '</div>' +
+    '</div>' +
+    '<button class="popup-alert-close" onclick="this.parentNode.remove()">✕</button>';
+  c.appendChild(el);
+  setTimeout(function () { el.classList.add('popup-fade'); }, 4000);
+  setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 4700);
+}
+
+// ═══════════════════════════════════════════════════════════
+// CONFIRM DIALOG
+// ═══════════════════════════════════════════════════════════
+var _confirmResolve = null;
+function confirmDialog(msg) {
+  return new Promise(function (resolve) {
+    $('confirmMsg').textContent = msg;
+    openModal('modal-confirm');
+    _confirmResolve = resolve;
+    $('confirmYes').onclick = function () { _confirmResolve = null; closeModal('modal-confirm'); resolve(true); };
+    $('confirmNo').onclick = function () { _confirmResolve = null; closeModal('modal-confirm'); resolve(false); };
+  });
+}
+
+// ═══════════════════════════════════════════════════════════
+// MODAL / DRAWER HELPERS
+// ═══════════════════════════════════════════════════════════
+function openModal(id) {
+  var el = $(id);
+  if (el) el.removeAttribute('hidden');
+}
+
+function closeModal(id) {
+  var el = $(id);
+  if (el) el.setAttribute('hidden', '');
+  if (id === 'modal-confirm' && _confirmResolve) {
+    _confirmResolve(false);
+    _confirmResolve = null;
+  }
+}
+window.openModal = openModal;
+window.closeModal = closeModal;
+
+function closeDrawer() {
+  $('issueDrawer').setAttribute('hidden', '');
+  S.drawerIssueId = null;
+  window._drawerPending = {};
+  var btn = $('drawerSaveBtn');
+  if (btn) { btn.style.display = 'none'; btn.textContent = 'Save changes'; btn.disabled = false; }
+}
+window.closeDrawer = closeDrawer;
+
+// Opens an issue in a new browser tab
+function openIssuePage(issueId) {
+  window.open('/?issue=' + encodeURIComponent(issueId), '_blank');
+}
+window.openIssuePage = openIssuePage;
+
+// Save all pending drawer changes to DB
+async function saveDrawerChanges() {
+  var btn = $('drawerSaveBtn');
+  var issueId = btn && btn.dataset.issueId;
+  var pending = window._drawerPending || {};
+  if (!issueId || !Object.keys(pending).length) return;
+  btn.disabled = true;
+  btn.textContent = 'Saving…';
+  try {
+    await api('/api/issues/' + issueId, 'PUT', pending);
+    window._drawerPending = {};
+    btn.style.display = 'none';
+    btn.textContent = 'Save changes';
+    btn.disabled = false;
+    // Refresh updated_at timestamp
+    var updated = await api('/api/issues/' + issueId);
+    $('drawerUpdated').textContent = fmtDateTime(updated.updated_at);
+    refreshAfterIssueChange();
+    toast('Changes saved');
+  } catch (e) {
+    btn.textContent = 'Save changes';
+    btn.disabled = false;
+  }
+}
+window.saveDrawerChanges = saveDrawerChanges;
+
+// ═══════════════════════════════════════════════════════════
+// CONSTANTS: STATUSES, PRIORITIES, TYPES
+// ═══════════════════════════════════════════════════════════
+var STATUS_COLORS = {
+  'To Do': '#6b7280',
+  'In Progress': '#3b82f6',
+  'In Review': '#f59e0b',
+  'Done': '#10b981'
+};
+var PRIORITY_COLORS = {
+  highest: '#dc2626', high: '#ef4444', medium: '#f59e0b', low: '#3b82f6', lowest: '#6b7280'
+};
+var PRIORITY_ICONS = {
+  highest: '\u2B06\u2B06', high: '\u2B06', medium: '\u2B1B', low: '\u2B07', lowest: '\u2B07\u2B07'
+};
+var TYPE_ICONS = {
+  epic: '\u26A1', story: '\uD83D\uDCD6', task: '\u2705', bug: '\uD83D\uDC1B', subtask: '\uD83D\uDCCC'
+};
+var SPRINT_STATUS_COLORS = {
+  planning: '#6b7280', active: '#3b82f6', completed: '#10b981'
+};
+
+// ═══════════════════════════════════════════════════════════
+// HTML BADGE / AVATAR HELPERS
+// ═══════════════════════════════════════════════════════════
+function statusBadge(status) {
+  var color = STATUS_COLORS[status] || '#6b7280';
+  return '<span class="badge" style="background:' + color + ';color:#fff">' + esc(status) + '</span>';
+}
+
+function priorityBadge(priority) {
+  var color = PRIORITY_COLORS[priority] || '#6b7280';
+  var icon = PRIORITY_ICONS[priority] || '';
+  return '<span class="badge badge-priority" style="color:' + color + '">' + icon + ' ' + cap(priority) + '</span>';
+}
+
+function typeIcon(type) {
+  return TYPE_ICONS[type] || '\uD83D\uDCC4';
+}
+
+function typeLabel(type) {
+  return cap(type || 'task');
+}
+
+function sprintStatusBadge(status) {
+  var color = SPRINT_STATUS_COLORS[status] || '#6b7280';
+  return '<span class="badge" style="background:' + color + ';color:#fff">' + cap(status) + '</span>';
+}
+
+function avatarHtml(user, size) {
+  size = size || 32;
+  if (!user) return '<span class="avatar" style="width:' + size + 'px;height:' + size + 'px;font-size:' + Math.round(size * 0.4) + 'px;background:#ccc">?</span>';
+  var color = user.color || '#174F96';
+  return '<span class="avatar" style="width:' + size + 'px;height:' + size + 'px;font-size:' + Math.round(size * 0.4) + 'px;background:' + color + '" title="' + esc(user.name) + '">' + initials(user.name) + '</span>';
+}
+
+function issueKeyStr(issue) {
+  return issue.key || (issue.project_key ? issue.project_key + '-?' : '#' + issue.id);
+}
+
+function statCard(label, value, color) {
+  return '<div class="stat-card"><div class="stat-value" style="color:' + color + '">' + value + '</div><div class="stat-label">' + label + '</div></div>';
+}
+
+// ═══════════════════════════════════════════════════════════
+// DATA HELPERS
+// ═══════════════════════════════════════════════════════════
+function findUser(id) {
+  if (!id || !S.data) return null;
+  var users = S.data.users || [];
+  for (var i = 0; i < users.length; i++) {
+    if (users[i].id == id) return users[i];
+  }
+  return null;
+}
+
+function getSpace(id) {
+  if (!id || !S.data) return null;
+  var spaces = S.data.spaces || [];
+  for (var i = 0; i < spaces.length; i++) {
+    if (spaces[i].id == id) return spaces[i];
+  }
+  return null;
+}
+
+function getSpaceMembers(spaceId) {
+  if (!S.data) return [];
+  var recs = (S.data.space_members || []).filter(function (m) { return m.space_id == spaceId; });
+  return recs.map(function (m) { return findUser(m.user_id); }).filter(Boolean);
+}
+
+function getSpaceIssues(spaceId) {
+  return (S.data.issues || []).filter(function (i) { return i.space_id == spaceId; });
+}
+
+function getSpaceSprints(spaceId) {
+  return (S.data.sprints || []).filter(function (sp) { return sp.space_id == spaceId; });
+}
+
+function isFavorited(spaceId) {
+  return (S.data.space_favorites || []).some(function (f) { return f.user_id == S.currentUser && f.space_id == spaceId; });
+}
+
+function populateUserSelect(sel, members, selectedId) {
+  var html = '<option value="">Unassigned</option>';
+  for (var i = 0; i < members.length; i++) {
+    var u = members[i];
+    html += '<option value="' + u.id + '"' + (u.id == selectedId ? ' selected' : '') + '>' + esc(u.name) + '</option>';
+  }
+  sel.innerHTML = html;
+}
+
+function populateSprintSelect(sel, sprints, selectedId) {
+  var html = '<option value="">None</option>';
+  for (var i = 0; i < sprints.length; i++) {
+    var sp = sprints[i];
+    html += '<option value="' + sp.id + '"' + (sp.id == selectedId ? ' selected' : '') + '>' + esc(sp.name) + ' (' + sp.status + ')</option>';
+  }
+  sel.innerHTML = html;
+}
+
+// ═══════════════════════════════════════════════════════════
+// THEME
+// ═══════════════════════════════════════════════════════════
+function initTheme() {
+  var saved = localStorage.getItem('sb-theme') || 'dark';
+  applyTheme(saved);
+  $('themeToggle').addEventListener('click', toggleTheme);
+  $('themeToggleTop').addEventListener('click', toggleTheme);
+}
+
+function toggleTheme() {
+  var isDark = !document.body.classList.contains('light');
+  applyTheme(isDark ? 'light' : 'dark');
+}
+
+function applyTheme(theme) {
+  if (theme === 'light') {
+    document.body.classList.add('light');
+  } else {
+    document.body.classList.remove('light');
+  }
+  var icon = theme === 'light' ? '\uD83C\uDF19' : '\u2600\uFE0F';
+  $('themeToggle').textContent = icon;
+  $('themeToggleTop').textContent = icon;
+  localStorage.setItem('sb-theme', theme);
+}
+
+// ═══════════════════════════════════════════════════════════
+// INITIALIZATION
+// ═══════════════════════════════════════════════════════════
+async function init() {
+  // Check auth
+  var token = localStorage.getItem('sb-token');
+  var storedUser = null;
+  try { storedUser = JSON.parse(localStorage.getItem('sb-user') || 'null'); } catch (_) {}
+  if (!token || !storedUser) {
+    window.location.href = '/login.html';
+    return;
+  }
+
+  try {
+    $('loadingMsg').textContent = 'Loading workspace data\u2026';
+    // Verify token still valid
+    var me = null;
+    try { me = await fetch('/api/auth/me', { headers: { Authorization: 'Bearer ' + token } }).then(function(r) { return r.ok ? r.json() : null; }); }
+    catch (_) {}
+    if (!me) { localStorage.removeItem('sb-token'); localStorage.removeItem('sb-user'); window.location.href = '/login.html'; return; }
+
+    S.currentUser = me.id;
+    S.currentUserObj = me;
+    localStorage.setItem('sb-user', JSON.stringify(me));
+
+    var data = await api('/api/data');
+    S.data = data;
+
+    // Update sidebar user footer
+    renderUserFooter(me);
+
+    renderSidebar();
+    navigateTo('home');
+    loadNotifications();
+
+    $('loadingOverlay').setAttribute('hidden', '');
+    $('app').removeAttribute('hidden');
+
+    // If opened via issue link (?issue=ID), show as full-page Jira-style view
+    var issueParam = new URLSearchParams(window.location.search).get('issue');
+    if (issueParam) {
+      document.body.classList.add('issue-page');
+      // Show only the issue drawer filling the full tab
+      $('app').removeAttribute('hidden');
+      setTimeout(function() {
+        openDrawer(issueParam);
+        // Update tab title once drawer loads
+        setTimeout(function() {
+          var key = $('drawerKey') && $('drawerKey').textContent;
+          var title = $('drawerTitle') && $('drawerTitle').textContent;
+          if (key || title) document.title = (key ? key + ' · ' : '') + (title || 'Issue') + ' — SprintBoard';
+        }, 400);
+      }, 100);
+    }
+  } catch (e) {
+    $('loadingOverlay').setAttribute('hidden', '');
+    $('errorMsg').textContent = e.message || 'Failed to load data';
+    $('errorOverlay').removeAttribute('hidden');
+  }
+}
+
+function renderUserFooter(user) {
+  var footer = $('sidebarUserFooter');
+  if (!footer || !user) return;
+  var isAdmin = user.role === 'admin' || user.role === 'owner';
+  footer.innerHTML =
+    '<div class="user-footer-info">' +
+    '<div class="user-avatar-sm" style="background:' + (user.color || '#6366f1') + '">' + initials(user.name) + '</div>' +
+    '<div class="user-footer-text">' +
+    '<div class="user-footer-name">' + esc(user.name) + '</div>' +
+    '<div class="user-footer-role">' + cap(user.role || 'member') + '</div>' +
+    '</div>' +
+    '</div>' +
+    '<div class="user-footer-actions">' +
+    (isAdmin ? '<button class="btn-icon footer-icon-btn" title="Admin Settings" onclick="navigateTo(\'settings\')" style="font-size:15px">⚙️</button>' : '') +
+    '<button class="btn-icon footer-icon-btn" title="Logout" onclick="doLogout()" style="font-size:15px">🚪</button>' +
+    '</div>';
+}
+
+async function doLogout() {
+  try { await api('/api/auth/logout', 'POST'); } catch (_) {}
+  localStorage.removeItem('sb-token');
+  localStorage.removeItem('sb-user');
+  window.location.href = '/login.html';
+}
+window.doLogout = doLogout;
+
+// ═══════════════════════════════════════════════════════════
+// NAVIGATION
+// ═══════════════════════════════════════════════════════════
+function navigateTo(view) {
+  S.currentView = view;
+  S.currentSpace = null;
+  S.currentTab = null;
+
+  // Hide everything
+  qsa('.view').forEach(function (v) { v.setAttribute('hidden', ''); });
+  $('spaceHeader').setAttribute('hidden', '');
+  $('spaceNav').setAttribute('hidden', '');
+
+  // Show target
+  var target = $('view-' + view);
+  if (target) target.removeAttribute('hidden');
+
+  // Breadcrumb
+  var label = view === 'yourwork' ? 'Your Work' : (view === 'global-reports' ? 'Reports' : cap(view));
+  updateBreadcrumb([{ label: label }]);
+
+  // Active state
+  qsa('.nav-item[data-view]').forEach(function (el) {
+    el.classList.toggle('active', el.dataset.view === view);
+  });
+  qsa('.nav-item[data-tab]').forEach(function (el) { el.classList.remove('active'); });
+  qsa('.space-item').forEach(function (el) { el.classList.remove('active'); });
+
+  // Render
+  if (view === 'home') renderHome();
+  else if (view === 'yourwork') renderYourWork();
+  else if (view === 'user-management') renderUserManagement();
+  else if (view === 'settings') renderAdminSettings('org-general');
+}
+
+function navigateToSpace(spaceId, tab) {
+  tab = tab || 'summary';
+  S.currentSpace = spaceId;
+  S.currentView = 'space';
+  S.currentTab = tab;
+
+  var space = getSpace(S.currentSpace);
+  if (!space) { toast('Space not found', 'error'); return; }
+
+  qsa('.view').forEach(function (v) { v.setAttribute('hidden', ''); });
+  $('spaceHeader').removeAttribute('hidden');
+  $('spaceNav').removeAttribute('hidden');
+  renderSpaceHeader(space);
+
+  updateBreadcrumb([
+    { label: 'Home', action: function () { navigateTo('home'); } },
+    { label: space.name, action: function () { navigateToSpace(spaceId, 'summary'); } },
+    { label: cap(tab) }
+  ]);
+
+  qsa('.nav-item[data-view]').forEach(function (el) { el.classList.remove('active'); });
+  qsa('.nav-item[data-tab]').forEach(function (el) { el.classList.toggle('active', el.dataset.tab === tab); });
+  qsa('.space-item').forEach(function (el) {
+    el.classList.toggle('active', el.dataset.spaceId === S.currentSpace);
+  });
+
+  renderTab(tab);
+}
+window.navigateToSpace = navigateToSpace;
+
+function renderTab(tab) {
+  S.currentTab = tab;
+  qsa('.view').forEach(function (v) { v.setAttribute('hidden', ''); });
+  qsa('.nav-item[data-tab]').forEach(function (el) { el.classList.toggle('active', el.dataset.tab === tab); });
+
+  var target = $('view-' + tab);
+  if (target) target.removeAttribute('hidden');
+
+  var space = getSpace(S.currentSpace);
+  if (space) {
+    updateBreadcrumb([
+      { label: 'Home', action: function () { navigateTo('home'); } },
+      { label: space.name, action: function () { navigateToSpace(S.currentSpace, 'summary'); } },
+      { label: cap(tab) }
+    ]);
+  }
+
+  switch (tab) {
+    case 'summary': renderSummary(); break;
+    case 'backlog': renderBacklog(); break;
+    case 'sprint': renderSprintBoard(); break;
+    case 'reports': renderReports(); break;
+    case 'allwork': renderAllWork(); break;
+    case 'filters': renderFilters(); break;
+    case 'space-settings': renderSpaceSettings(); break;
+  }
+}
+
+function updateBreadcrumb(items) {
+  var html = '';
+  for (var i = 0; i < items.length; i++) {
+    var item = items[i];
+    if (item.action && i < items.length - 1) {
+      html += '<a class="breadcrumb-link" data-bc-idx="' + i + '">' + esc(item.label) + '</a><span class="breadcrumb-sep"> / </span>';
+    } else {
+      html += '<span class="breadcrumb-current">' + esc(item.label) + '</span>';
+    }
+  }
+  $('breadcrumb').innerHTML = html;
+  for (var j = 0; j < items.length; j++) {
+    if (items[j].action) {
+      var el = qs('[data-bc-idx="' + j + '"]');
+      if (el) el.addEventListener('click', items[j].action);
+    }
+  }
+}
+
+function renderCurrentView() {
+  if (S.currentSpace) {
+    navigateToSpace(S.currentSpace, S.currentTab || 'summary');
+  } else {
+    navigateTo(S.currentView || 'home');
+  }
+}
+
+async function refreshData() {
+  var url = '/api/data';
+  if (S.currentSpace) url += '?space_id=' + S.currentSpace;
+  var data = await api(url);
+  S.data = data;
+}
+
+async function refreshAfterIssueChange() {
+  await refreshData();
+  if (S.currentSpace && S.currentTab) renderTab(S.currentTab);
+}
+
+// ═══════════════════════════════════════════════════════════
+// SIDEBAR
+// ═══════════════════════════════════════════════════════════
+function renderSidebar() {
+  var isAdmin = canCreateSpace();
+
+  // Show/hide the + new space button based on role
+  var newSpaceBtn = $('newSpaceBtn');
+  if (newSpaceBtn) newSpaceBtn.style.display = isAdmin ? '' : 'none';
+
+  // Favorites
+  var favRecs = (S.data.space_favorites || []).filter(function (f) { return f.user_id == S.currentUser; });
+  var favs = favRecs.map(function (f) { return getSpace(f.space_id); }).filter(Boolean);
+  $('favSpaces').innerHTML = favs.length
+    ? favs.map(spaceNavItem).join('')
+    : '<p class="text-muted sidebar-empty">No favorites yet</p>';
+
+  // All spaces — members only see spaces they are assigned to in DB
+  var allSpaces = (S.data.spaces || []).filter(function (s) { return !s.is_archived; });
+  var spaces = isAdmin ? allSpaces : allSpaces.filter(function(s) {
+    return (S.data.space_members || []).some(function(m) {
+      return m.space_id === s.id && m.user_id === S.currentUser;
+    });
+  });
+  $('spacesList').innerHTML = spaces.length
+    ? spaces.map(spaceNavItem).join('')
+    : '<p class="text-muted sidebar-empty">No spaces</p>';
+
+  // Bind space clicks
+  qsa('.space-item').forEach(function (el) {
+    el.addEventListener('click', function (e) {
+      e.preventDefault();
+      navigateToSpace(el.dataset.spaceId);
+    });
+  });
+
+  // Bind 3-dot menu buttons on space items
+  qsa('.space-item-menu-btn').forEach(function (btn) {
+    btn.addEventListener('click', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      var spaceId = btn.dataset.spaceMenuId;
+      showSpaceContextMenu(btn, spaceId);
+    });
+  });
+}
+
+function spaceNavItem(sp) {
+  var active = S.currentSpace == sp.id ? ' active' : '';
+  return '<a class="nav-item space-item' + active + '" data-space-id="' + sp.id + '">' +
+    '<span class="space-dot" style="background:' + (sp.color || '#174F96') + '"></span>' +
+    '<span class="nav-icon">' + esc(sp.icon || '\uD83D\uDCC1') + '</span> ' +
+    '<span class="space-item-name">' + esc(sp.name) + '</span>' +
+    '<button class="btn-icon space-item-menu-btn" data-space-menu-id="' + sp.id + '" title="More options">\u22EF</button>' +
+    '</a>';
+}
+
+// ═══════════════════════════════════════════════════════════
+// SPACE HEADER
+// ═══════════════════════════════════════════════════════════
+function renderSpaceHeader(space) {
+  $('spaceIcon').textContent = space.icon || '\uD83D\uDCC1';
+  $('spaceName').textContent = space.name;
+  $('spaceKey').textContent = space.key;
+
+  var members = getSpaceMembers(space.id);
+  var shown = members.slice(0, 5);
+  var overflow = members.length - 5;
+  var membersHtml = shown.map(function (u) { return avatarHtml(u, 28); }).join('');
+  if (overflow > 0) membersHtml += '<span class="avatar-overflow">+' + overflow + '</span>';
+  $('spaceMembers').innerHTML = membersHtml;
+
+  var starred = isFavorited(space.id);
+  $('starSpaceBtn').textContent = starred ? '\u2605' : '\u2606';
+  $('starSpaceBtn').classList.toggle('starred', starred);
+  $('starSpaceBtn').onclick = async function () {
+    await api('/api/spaces/' + space.id + '/favorite', 'POST', { user_id: S.currentUser });
+    await refreshData();
+    renderSidebar();
+    renderSpaceHeader(getSpace(space.id));
+  };
+
+  $('spaceActionsBtn').onclick = function () { openSpaceModal(space); };
+}
+
+// ═══════════════════════════════════════════════════════════
+// HOME VIEW
+// ═══════════════════════════════════════════════════════════
+function renderHome() {
+  var allSpaces = (S.data.spaces || []).filter(function (s) { return !s.is_archived; });
+  // Members only see spaces they are assigned to in DB
+  var spaces = canCreateSpace() ? allSpaces : allSpaces.filter(function(s) {
+    return (S.data.space_members || []).some(function(m) {
+      return m.space_id === s.id && m.user_id === S.currentUser;
+    });
+  });
+  var allIssues = S.data.issues || [];
+  var myIssues = allIssues.filter(function (i) { return i.assignee_id == S.currentUser && i.status !== 'Done'; });
+  var recentIssues = allIssues.slice().sort(function (a, b) { return new Date(b.updated_at) - new Date(a.updated_at); }).slice(0, 8);
+
+  $('homeStats').innerHTML =
+    statCard('Spaces', spaces.length, '#174F96') +
+    statCard('Total Issues', allIssues.length, '#6366f1') +
+    statCard('My Open Issues', myIssues.length, '#f59e0b') +
+    statCard('Recent Updates', recentIssues.length, '#10b981');
+
+  // My Issues
+  var myHtml = '';
+  if (myIssues.length) {
+    var toShow = myIssues.slice(0, 8);
+    for (var i = 0; i < toShow.length; i++) {
+      var issue = toShow[i];
+      myHtml += '<div class="card-list-item" onclick="openIssuePage(\'' + issue.id + '\')">' +
+        '<span class="issue-type-icon">' + typeIcon(issue.type) + '</span>' +
+        '<span class="issue-key">' + esc(issueKeyStr(issue)) + '</span>' +
+        '<span class="issue-title-text">' + esc(issue.title) + '</span>' +
+        statusBadge(issue.status) +
+        priorityBadge(issue.priority) +
+        '</div>';
+    }
+  } else {
+    myHtml = '<p class="text-muted">No issues assigned to you</p>';
+  }
+  $('myIssues').innerHTML = myHtml;
+
+  // Recent Activity
+  var actHtml = '';
+  for (var j = 0; j < recentIssues.length; j++) {
+    var ri = recentIssues[j];
+    var user = findUser(ri.assignee_id);
+    actHtml += '<div class="activity-item" onclick="openIssuePage(\'' + ri.id + '\')">' +
+      avatarHtml(user, 28) +
+      '<div class="activity-body">' +
+      '<span class="issue-key">' + esc(issueKeyStr(ri)) + '</span> ' +
+      '<span>' + esc(ri.title) + '</span> ' +
+      '<span class="text-muted">' + relativeTime(ri.updated_at) + '</span>' +
+      '</div></div>';
+  }
+  $('recentActivity').innerHTML = actHtml;
+
+  // All Spaces Grid
+  var gridHtml = '';
+  for (var k = 0; k < spaces.length; k++) {
+    var sp = spaces[k];
+    var mems = getSpaceMembers(sp.id);
+    var issCount = getSpaceIssues(sp.id).length;
+    gridHtml += '<div class="space-card" onclick="navigateToSpace(\'' + sp.id + '\')">' +
+      '<div class="space-card-header">' +
+      '<span class="space-card-icon" style="background:' + (sp.color || '#174F96') + '">' + esc(sp.icon || '\uD83D\uDCC1') + '</span>' +
+      '<div><h4 class="space-card-name">' + esc(sp.name) + '</h4>' +
+      '<span class="badge badge-muted">' + esc(sp.key) + '</span></div>' +
+      '</div>' +
+      '<p class="space-card-desc">' + esc(sp.description || 'No description') + '</p>' +
+      '<div class="space-card-footer">' +
+      '<span>' + mems.length + ' member' + (mems.length !== 1 ? 's' : '') + '</span>' +
+      '<span>' + issCount + ' issue' + (issCount !== 1 ? 's' : '') + '</span>' +
+      '</div></div>';
+  }
+  $('allSpacesGrid').innerHTML = gridHtml;
+}
+
+// ═══════════════════════════════════════════════════════════
+// YOUR WORK VIEW
+// ═══════════════════════════════════════════════════════════
+function renderYourWork() {
+  var tabs = qsa('[data-yourwork-tab]');
+  tabs.forEach(function (t) {
+    t.classList.toggle('active', t.dataset.yourworkTab === S.yourWorkTab);
+    t.onclick = function () {
+      S.yourWorkTab = t.dataset.yourworkTab;
+      tabs.forEach(function (x) { x.classList.toggle('active', x.dataset.yourworkTab === S.yourWorkTab); });
+      renderYourWorkContent();
+    };
+  });
+  renderYourWorkContent();
+}
+
+function renderYourWorkContent() {
+  var allIssues = S.data.issues || [];
+  var issues;
+  if (S.yourWorkTab === 'assigned') {
+    issues = allIssues.filter(function (i) { return i.assignee_id == S.currentUser; });
+  } else if (S.yourWorkTab === 'reported') {
+    issues = allIssues.filter(function (i) { return i.reporter_id == S.currentUser; });
+  } else {
+    issues = allIssues.slice().sort(function (a, b) { return new Date(b.updated_at) - new Date(a.updated_at); }).slice(0, 30);
+  }
+
+  if (!issues.length) {
+    $('yourWorkContent').innerHTML = '<p class="text-muted placeholder-text">No issues found</p>';
+    return;
+  }
+
+  var html = '<table class="data-table"><thead><tr>' +
+    '<th>Key</th><th>Title</th><th>Type</th><th>Status</th><th>Priority</th><th>Space</th><th>Updated</th>' +
+    '</tr></thead><tbody>';
+  for (var i = 0; i < issues.length; i++) {
+    var iss = issues[i];
+    var space = getSpace(iss.space_id);
+    html += '<tr class="clickable-row" onclick="openIssuePage(\'' + iss.id + '\')">' +
+      '<td class="issue-key">' + esc(issueKeyStr(iss)) + '</td>' +
+      '<td>' + esc(iss.title) + '</td>' +
+      '<td>' + typeIcon(iss.type) + ' ' + cap(iss.type) + '</td>' +
+      '<td>' + statusBadge(iss.status) + '</td>' +
+      '<td>' + priorityBadge(iss.priority) + '</td>' +
+      '<td>' + esc(space ? space.name : '') + '</td>' +
+      '<td class="text-muted">' + relativeTime(iss.updated_at) + '</td></tr>';
+  }
+  html += '</tbody></table>';
+  $('yourWorkContent').innerHTML = html;
+}
+
+// ═══════════════════════════════════════════════════════════
+// SUMMARY TAB
+// ═══════════════════════════════════════════════════════════
+function renderSummary() {
+  var issues = getSpaceIssues(S.currentSpace);
+  var total = issues.length;
+  var todo = 0, inProg = 0, inRev = 0, done = 0, overdue = 0;
+  var now = new Date();
+  for (var i = 0; i < issues.length; i++) {
+    var iss = issues[i];
+    if (iss.status === 'To Do') todo++;
+    else if (iss.status === 'In Progress') inProg++;
+    else if (iss.status === 'In Review') inRev++;
+    else if (iss.status === 'Done') done++;
+    if (iss.due_date && new Date(iss.due_date) < now && iss.status !== 'Done') overdue++;
+  }
+
+  $('summaryStats').innerHTML =
+    statCard('Total Issues', total, '#174F96') +
+    statCard('To Do', todo, STATUS_COLORS['To Do']) +
+    statCard('In Progress', inProg, STATUS_COLORS['In Progress']) +
+    statCard('Done', done, STATUS_COLORS['Done']) +
+    statCard('Overdue', overdue, '#dc2626');
+
+  // Widgets
+  var sprints = getSpaceSprints(S.currentSpace);
+  var activeSprint = null;
+  for (var s = 0; s < sprints.length; s++) {
+    if (sprints[s].status === 'active') { activeSprint = sprints[s]; break; }
+  }
+  var recentIssues = issues.slice().sort(function (a, b) { return new Date(b.updated_at) - new Date(a.updated_at); }).slice(0, 5);
+  var unassigned = issues.filter(function (iss) { return !iss.assignee_id; });
+
+  var widgets = '';
+
+  // Sprint progress widget
+  if (activeSprint) {
+    var spIssues = issues.filter(function (iss) { return iss.sprint_id == activeSprint.id; });
+    var spDone = spIssues.filter(function (iss) { return iss.status === 'Done'; }).length;
+    var spTotal = spIssues.length;
+    var pct = spTotal ? Math.round((spDone / spTotal) * 100) : 0;
+    widgets += '<div class="widget-card">' +
+      '<h4 class="widget-title">Sprint Progress: ' + esc(activeSprint.name) + '</h4>' +
+      '<div class="progress-bar"><div class="progress-fill" style="width:' + pct + '%"></div></div>' +
+      '<p class="text-muted">' + spDone + ' / ' + spTotal + ' issues done (' + pct + '%)</p></div>';
+  }
+
+  // Recent issues widget
+  widgets += '<div class="widget-card"><h4 class="widget-title">Recently Updated</h4>';
+  for (var r = 0; r < recentIssues.length; r++) {
+    var ri = recentIssues[r];
+    widgets += '<div class="widget-list-item" onclick="openIssuePage(\'' + ri.id + '\')">' +
+      '<span class="issue-key">' + esc(issueKeyStr(ri)) + '</span> ' +
+      '<span>' + esc(ri.title) + '</span> ' +
+      '<span class="text-muted">' + relativeTime(ri.updated_at) + '</span></div>';
+  }
+  widgets += '</div>';
+
+  // Unassigned widget
+  widgets += '<div class="widget-card"><h4 class="widget-title">Unassigned Issues (' + unassigned.length + ')</h4>';
+  var unShow = unassigned.slice(0, 5);
+  for (var u = 0; u < unShow.length; u++) {
+    widgets += '<div class="widget-list-item" onclick="openIssuePage(\'' + unShow[u].id + '\')">' +
+      '<span class="issue-key">' + esc(issueKeyStr(unShow[u])) + '</span> ' +
+      '<span>' + esc(unShow[u].title) + '</span></div>';
+  }
+  if (!unassigned.length) widgets += '<p class="text-muted">All issues assigned</p>';
+  widgets += '</div>';
+
+  $('summaryWidgets').innerHTML = widgets;
+
+  // Charts
+  var statusGroups = [
+    { label: 'To Do', count: todo, color: STATUS_COLORS['To Do'] },
+    { label: 'In Progress', count: inProg, color: STATUS_COLORS['In Progress'] },
+    { label: 'In Review', count: inRev, color: STATUS_COLORS['In Review'] },
+    { label: 'Done', count: done, color: STATUS_COLORS['Done'] }
+  ];
+  var prioGroups = ['highest', 'high', 'medium', 'low', 'lowest'].map(function (p) {
+    return {
+      label: cap(p),
+      count: issues.filter(function (iss) { return iss.priority === p; }).length,
+      color: PRIORITY_COLORS[p]
+    };
+  });
+
+  $('summaryCharts').innerHTML =
+    '<div class="chart-card"><h4 class="chart-title">Status Distribution</h4>' + barChart(statusGroups, total) + '</div>' +
+    '<div class="chart-card"><h4 class="chart-title">Priority Distribution</h4>' + barChart(prioGroups, total) + '</div>';
+}
+
+function barChart(groups, total) {
+  var html = '';
+  for (var i = 0; i < groups.length; i++) {
+    var g = groups[i];
+    var pct = total ? Math.round((g.count / total) * 100) : 0;
+    html += '<div class="bar-row">' +
+      '<span class="bar-label">' + g.label + '</span>' +
+      '<div class="bar-track"><div class="bar-fill" style="width:' + pct + '%;background:' + g.color + '"></div></div>' +
+      '<span class="bar-value">' + g.count + '</span></div>';
+  }
+  return html;
+}
+
+// ═══════════════════════════════════════════════════════════
+// TIMELINE TAB
+// ═══════════════════════════════════════════════════════════
+function renderTimeline() {
+  var issues = getSpaceIssues(S.currentSpace).filter(function (i) { return i.start_date && i.due_date; });
+  if (!issues.length) {
+    $('timelineContainer').innerHTML = '<p class="placeholder-text">No issues with date ranges to display on timeline.</p>';
+    return;
+  }
+
+  var allDates = [];
+  for (var i = 0; i < issues.length; i++) {
+    allDates.push(new Date(issues[i].start_date).getTime());
+    allDates.push(new Date(issues[i].due_date).getTime());
+  }
+  var minDate = new Date(Math.min.apply(null, allDates));
+  var maxDate = new Date(Math.max.apply(null, allDates));
+  minDate.setDate(minDate.getDate() - 7);
+  maxDate.setDate(maxDate.getDate() + 7);
+  var totalDays = Math.ceil((maxDate - minDate) / 86400000);
+
+  // Week headers
+  var weeks = [];
+  var wd = new Date(minDate);
+  wd.setDate(wd.getDate() - wd.getDay());
+  while (wd <= maxDate) {
+    weeks.push(new Date(wd));
+    wd.setDate(wd.getDate() + 7);
+  }
+
+  var dayWidth = 24;
+  var totalWidth = totalDays * dayWidth;
+
+  var html = '<div class="timeline-chart" style="min-width:' + (totalWidth + 250) + 'px">';
+
+  // Header
+  html += '<div class="timeline-header-row"><div class="timeline-label-col">Issue</div>' +
+    '<div class="timeline-dates-col" style="width:' + totalWidth + 'px">';
+  for (var w = 0; w < weeks.length; w++) {
+    var offset = Math.ceil((weeks[w] - minDate) / 86400000) * dayWidth;
+    html += '<span class="timeline-week-label" style="left:' + offset + 'px">' + fmtDateShort(weeks[w]) + '</span>';
+  }
+  html += '</div></div>';
+
+  // Rows
+  for (var j = 0; j < issues.length; j++) {
+    var iss = issues[j];
+    var start = new Date(iss.start_date);
+    var end = new Date(iss.due_date);
+    var leftDays = Math.max(0, Math.ceil((start - minDate) / 86400000));
+    var duration = Math.max(1, Math.ceil((end - start) / 86400000));
+    var left = leftDays * dayWidth;
+    var width = duration * dayWidth;
+    var color = STATUS_COLORS[iss.status] || '#6b7280';
+
+    html += '<div class="timeline-row">' +
+      '<div class="timeline-label-col" onclick="openIssuePage(\'' + iss.id + '\')" style="cursor:pointer">' +
+      '<span class="issue-key">' + esc(issueKeyStr(iss)) + '</span> ' +
+      '<span class="timeline-issue-title">' + esc(iss.title) + '</span></div>' +
+      '<div class="timeline-dates-col" style="width:' + totalWidth + 'px">' +
+      '<div class="timeline-bar" style="left:' + left + 'px;width:' + width + 'px;background:' + color + '" title="' + esc(iss.title) + '"></div>' +
+      '</div></div>';
+  }
+
+  html += '</div>';
+  $('timelineContainer').innerHTML = html;
+}
+
+// ═══════════════════════════════════════════════════════════
+// BACKLOG TAB
+// ═══════════════════════════════════════════════════════════
+function renderBacklog() {
+  var sprints = getSpaceSprints(S.currentSpace);
+  var issues = getSpaceIssues(S.currentSpace);
+  var searchTerm = ($('backlogSearch').value || '').toLowerCase();
+
+  // Sort sprints: active first, planning, completed
+  var order = { active: 0, planning: 1, completed: 2 };
+  var sorted = sprints.slice().sort(function (a, b) {
+    return (order[a.status] || 9) - (order[b.status] || 9);
+  });
+
+  var html = '';
+
+  for (var s = 0; s < sorted.length; s++) {
+    var sp = sorted[s];
+    var sprintIssues = issues.filter(function (iss) { return iss.sprint_id == sp.id; });
+    if (searchTerm) {
+      sprintIssues = sprintIssues.filter(function (iss) {
+        return iss.title.toLowerCase().indexOf(searchTerm) >= 0 || issueKeyStr(iss).toLowerCase().indexOf(searchTerm) >= 0;
+      });
+    }
+    var points = sprintIssues.reduce(function (sum, iss) { return sum + (iss.story_points || 0); }, 0);
+    var collapsed = sp.status === 'completed';
+
+    html += '<div class="backlog-lane" data-sprint-id="' + sp.id + '">' +
+      '<div class="backlog-lane-header" onclick="window._toggleBacklogLane(this)">' +
+      '<div class="lane-header-left">' +
+      '<span class="lane-toggle">' + (collapsed ? '\u25B8' : '\u25BE') + '</span>' +
+      '<strong>' + esc(sp.name) + '</strong> ' +
+      sprintStatusBadge(sp.status) +
+      ' <span class="text-muted">' + sprintIssues.length + ' issues</span>' +
+      ' <span class="text-muted">' + points + ' pts</span></div>' +
+      '<div class="lane-header-actions">';
+
+    if (sp.status === 'planning') {
+      html += '<button class="btn btn-sm btn-primary" onclick="event.stopPropagation();window._startSprint(\'' + sp.id + '\')">Start Sprint</button>';
+    }
+    if (sp.status === 'active') {
+      html += '<button class="btn btn-sm btn-outline" onclick="event.stopPropagation();window._completeSprint(\'' + sp.id + '\')">Complete</button>';
+    }
+    html += '<button class="btn btn-sm btn-outline" onclick="event.stopPropagation();window._openSprintModal(\'' + sp.id + '\')">Edit</button>' +
+      '<button class="btn btn-sm btn-outline" onclick="event.stopPropagation();window._deleteSprint(\'' + sp.id + '\')">Delete</button>' +
+      '</div></div>' +
+      '<div class="backlog-lane-body' + (collapsed ? ' collapsed' : '') + '" data-sprint-drop="' + sp.id + '" ' +
+      'ondragover="event.preventDefault();this.classList.add(\'drag-over\')" ' +
+      'ondragleave="this.classList.remove(\'drag-over\')" ' +
+      'ondrop="window._dropToSprint(event,' + sp.id + ')">';
+
+    for (var bi = 0; bi < sprintIssues.length; bi++) {
+      html += backlogRow(sprintIssues[bi]);
+    }
+    html += '<div class="backlog-add-row"><button class="btn btn-link btn-sm" onclick="window._addIssueToSprint(\'' + sp.id + '\')">+ Add issue</button></div>';
+    html += '</div></div>';
+  }
+
+  // Backlog (no sprint)
+  var backlogIssues = issues.filter(function (iss) { return !iss.sprint_id; });
+  if (searchTerm) {
+    backlogIssues = backlogIssues.filter(function (iss) {
+      return iss.title.toLowerCase().indexOf(searchTerm) >= 0 || issueKeyStr(iss).toLowerCase().indexOf(searchTerm) >= 0;
+    });
+  }
+
+  html += '<div class="backlog-lane">' +
+    '<div class="backlog-lane-header" onclick="window._toggleBacklogLane(this)">' +
+    '<div class="lane-header-left"><span class="lane-toggle">\u25BE</span>' +
+    '<strong>Backlog</strong> <span class="text-muted">' + backlogIssues.length + ' issues</span></div></div>' +
+    '<div class="backlog-lane-body" data-sprint-drop="null" ' +
+    'ondragover="event.preventDefault();this.classList.add(\'drag-over\')" ' +
+    'ondragleave="this.classList.remove(\'drag-over\')" ' +
+    'ondrop="window._dropToSprint(event,null)">';
+
+  for (var bk = 0; bk < backlogIssues.length; bk++) {
+    html += backlogRow(backlogIssues[bk]);
+  }
+  html += '<div class="backlog-add-row"><button class="btn btn-link btn-sm" onclick="window._addIssueToSprint(null)">+ Add issue</button></div>';
+  html += '</div></div>';
+
+  $('backlogContent').innerHTML = html;
+}
+
+function backlogRow(iss) {
+  var assignee = findUser(iss.assignee_id);
+  var isSubtask = iss.type === 'subtask';
+  var parentInfo = '';
+  if (isSubtask && iss.parent_id) {
+    var parent = S.data.issues.find(function(i){ return i.id === iss.parent_id; });
+    if (parent) parentInfo = '<span class="subtask-parent-ref" title="Subtask of ' + esc(parent.key) + '">' + esc(parent.key) + ' &rsaquo;</span> ';
+  }
+  return '<div class="backlog-row' + (isSubtask ? ' backlog-row-subtask' : '') + '" draggable="true" data-issue-id="' + iss.id + '" ' +
+    'ondragstart="event.dataTransfer.setData(\'text/plain\',\'' + iss.id + '\')" ' +
+    'onclick="openIssuePage(\'' + iss.id + '\')">' +
+    '<span class="issue-type-icon">' + typeIcon(iss.type) + '</span>' +
+    '<span class="issue-key">' + esc(issueKeyStr(iss)) + '</span>' +
+    parentInfo +
+    '<span class="backlog-issue-title">' + esc(iss.title) + '</span>' +
+    priorityBadge(iss.priority) +
+    statusBadge(iss.status) +
+    (iss.story_points != null ? '<span class="badge badge-points">' + iss.story_points + '</span>' : '') +
+    avatarHtml(assignee, 24) +
+    '</div>';
+}
+
+// Backlog global handlers
+window._toggleBacklogLane = function (header) {
+  var body = header.nextElementSibling;
+  body.classList.toggle('collapsed');
+  var toggle = header.querySelector('.lane-toggle');
+  toggle.textContent = body.classList.contains('collapsed') ? '\u25B8' : '\u25BE';
+};
+
+window._dropToSprint = async function (event, sprintId) {
+  event.preventDefault();
+  event.currentTarget.classList.remove('drag-over');
+  var issueId = event.dataTransfer.getData('text/plain');
+  if (!issueId) return;
+  await api('/api/issues/' + issueId + '/move', 'PUT', { sprint_id: sprintId, position: 0 });
+  await refreshData();
+  renderBacklog();
+  toast('Issue moved');
+};
+
+window._addIssueToSprint = function (sprintId) {
+  resetIssueForm();
+  $('issueSpaceId').value = S.currentSpace;
+  $('issueModalTitle').textContent = 'Create Issue';
+  populateIssueFormSelects();
+  if (sprintId) $('issueSprint').value = sprintId;
+  openModal('modal-issue');
+};
+
+window._startSprint = async function (id) {
+  await api('/api/sprints/' + id + '/start', 'POST');
+  await refreshData();
+  renderBacklog();
+  toast('Sprint started');
+};
+
+window._completeSprint = async function (id) {
+  var ok = await confirmDialog('Complete this sprint? Incomplete issues will move to the backlog.');
+  if (!ok) return;
+  await api('/api/sprints/' + id + '/complete', 'POST');
+  await refreshData();
+  renderBacklog();
+  toast('Sprint completed');
+};
+
+window._deleteSprint = async function (id) {
+  var ok = await confirmDialog('Delete this sprint? Issues will be moved to the backlog.');
+  if (!ok) return;
+  await api('/api/sprints/' + id, 'DELETE');
+  await refreshData();
+  renderBacklog();
+  toast('Sprint deleted');
+};
+
+window._openSprintModal = function (id) {
+  if (id) {
+    var sp = (S.data.sprints || []).find(function (s) { return s.id == id; });
+    if (!sp) return;
+    $('sprintIdInput').value = sp.id;
+    $('sprintSpaceId').value = sp.space_id;
+    $('sprintNameInput').value = sp.name;
+    $('sprintGoal').value = sp.goal || '';
+    $('sprintStartDate').value = fmtDateISO(sp.start_date);
+    $('sprintEndDate').value = fmtDateISO(sp.end_date);
+    $('sprintModalTitle').textContent = 'Edit Sprint';
+  } else {
+    $('sprintIdInput').value = '';
+    $('sprintSpaceId').value = S.currentSpace;
+    $('sprintNameInput').value = '';
+    $('sprintGoal').value = '';
+    $('sprintStartDate').value = '';
+    $('sprintEndDate').value = '';
+    $('sprintModalTitle').textContent = 'Create Sprint';
+  }
+  openModal('modal-sprint');
+};
+
+// ═══════════════════════════════════════════════════════════
+// ACTIVE SPRINT (BOARD) TAB
+// ═══════════════════════════════════════════════════════════
+function renderSprintBoard() {
+  var sprints = getSpaceSprints(S.currentSpace);
+  var activeSprint = null;
+  for (var s = 0; s < sprints.length; s++) {
+    if (sprints[s].status === 'active') { activeSprint = sprints[s]; break; }
+  }
+
+  if (!activeSprint) {
+    $('sprintHeader').innerHTML = '';
+    $('sprintBoard').innerHTML = '<p class="placeholder-text">No active sprint. Go to Backlog to start a sprint.</p>';
+    return;
+  }
+
+  var issues = getSpaceIssues(S.currentSpace).filter(function (i) { return i.sprint_id == activeSprint.id; });
+  var doneCount = issues.filter(function (i) { return i.status === 'Done'; }).length;
+  var pct = issues.length ? Math.round((doneCount / issues.length) * 100) : 0;
+  var totalPoints = issues.reduce(function (sum, i) { return sum + (i.story_points || 0); }, 0);
+  var donePoints = issues.filter(function (i) { return i.status === 'Done'; }).reduce(function (sum, i) { return sum + (i.story_points || 0); }, 0);
+
+  $('sprintHeader').innerHTML = '<div class="sprint-info">' +
+    '<h3>' + esc(activeSprint.name) + '</h3>' +
+    (activeSprint.goal ? '<p class="text-muted">' + esc(activeSprint.goal) + '</p>' : '') +
+    '<div class="sprint-meta">' +
+    '<span>' + fmtDateShort(activeSprint.start_date) + ' \u2014 ' + fmtDateShort(activeSprint.end_date) + '</span>' +
+    '<span>' + doneCount + '/' + issues.length + ' issues</span>' +
+    '<span>' + donePoints + '/' + totalPoints + ' pts</span></div>' +
+    '<div class="progress-bar"><div class="progress-fill" style="width:' + pct + '%"></div></div></div>';
+
+  var statuses = ['To Do', 'In Progress', 'In Review', 'Done'];
+  var boardHtml = '';
+  for (var c = 0; c < statuses.length; c++) {
+    var status = statuses[c];
+    var colIssues = issues.filter(function (i) { return i.status === status; });
+    boardHtml += '<div class="board-col" data-status="' + status + '" ' +
+      'ondragover="event.preventDefault();this.classList.add(\'drag-over\')" ' +
+      'ondragleave="this.classList.remove(\'drag-over\')" ' +
+      'ondrop="window._dropToStatus(event,\'' + status + '\')">' +
+      '<div class="board-col-header"><span>' + status + '</span>' +
+      '<span class="col-count">' + colIssues.length + '</span></div>' +
+      '<div class="board-col-body">';
+    for (var ci = 0; ci < colIssues.length; ci++) {
+      boardHtml += boardCard(colIssues[ci]);
+    }
+    boardHtml += '</div></div>';
+  }
+  $('sprintBoard').innerHTML = boardHtml;
+}
+
+function boardCard(iss) {
+  var assignee = findUser(iss.assignee_id);
+  var isSubtask = iss.type === 'subtask';
+  var parentTag = '';
+  if (isSubtask && iss.parent_id) {
+    var parent = S.data.issues.find(function(i){ return i.id === iss.parent_id; });
+    if (parent) parentTag = '<span class="subtask-parent-ref" style="font-size:10px;margin-left:4px">' + esc(parent.key) + '</span>';
+  }
+  return '<div class="board-card' + (isSubtask ? ' board-card-subtask' : '') + '" draggable="true" data-issue-id="' + iss.id + '" ' +
+    'ondragstart="event.dataTransfer.setData(\'text/plain\',\'' + iss.id + '\')" ' +
+    'onclick="openIssuePage(\'' + iss.id + '\')">' +
+    '<div class="board-card-header"><span class="issue-type-icon" style="font-size:12px">' + typeIcon(iss.type) + '</span> <span class="issue-key">' + esc(issueKeyStr(iss)) + '</span>' + parentTag +
+    (iss.story_points != null ? '<span class="badge badge-points" style="margin-left:auto">' + iss.story_points + '</span>' : '') +
+    '</div>' +
+    '<div class="board-card-title">' + esc(iss.title) + '</div>' +
+    '<div class="board-card-footer">' + priorityBadge(iss.priority) + avatarHtml(assignee, 24) + '</div></div>';
+}
+
+window._dropToStatus = async function (event, status) {
+  event.preventDefault();
+  event.currentTarget.classList.remove('drag-over');
+  var issueId = event.dataTransfer.getData('text/plain');
+  if (!issueId) return;
+  await api('/api/issues/' + issueId, 'PUT', { status: status });
+  await refreshData();
+  renderSprintBoard();
+  toast('Issue moved to ' + status);
+};
+
+// ═══════════════════════════════════════════════════════════
+// CALENDAR TAB
+// ═══════════════════════════════════════════════════════════
+function renderCalendar() {
+  var date = S.calendarDate;
+  var year = date.getFullYear();
+  var month = date.getMonth();
+  var monthName = date.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+
+  $('calendarHeader').textContent = monthName;
+  $('calendarPrev').onclick = function () { S.calendarDate = new Date(year, month - 1, 1); renderCalendar(); };
+  $('calendarNext').onclick = function () { S.calendarDate = new Date(year, month + 1, 1); renderCalendar(); };
+
+  qsa('[data-calendar-view]').forEach(function (btn) {
+    btn.classList.toggle('active', btn.dataset.calendarView === S.calendarView);
+    btn.onclick = function () { S.calendarView = btn.dataset.calendarView; renderCalendar(); };
+  });
+
+  var issues = getSpaceIssues(S.currentSpace);
+  var firstDay = new Date(year, month, 1);
+  var lastDay = new Date(year, month + 1, 0);
+  var startPad = firstDay.getDay();
+  var totalDays = lastDay.getDate();
+  var todayStr = fmtDateISO(new Date());
+
+  var weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  var html = '<div class="calendar-weekdays">';
+  for (var w = 0; w < weekdays.length; w++) {
+    html += '<div class="calendar-weekday">' + weekdays[w] + '</div>';
+  }
+  html += '</div><div class="calendar-days">';
+
+  for (var p = 0; p < startPad; p++) {
+    html += '<div class="calendar-day calendar-day-empty"></div>';
+  }
+
+  for (var d = 1; d <= totalDays; d++) {
+    var dateStr = year + '-' + String(month + 1).padStart(2, '0') + '-' + String(d).padStart(2, '0');
+    var isToday = dateStr === todayStr;
+    var dayIssues = issues.filter(function (i) { return fmtDateISO(i.due_date) === dateStr; });
+
+    html += '<div class="calendar-day' + (isToday ? ' calendar-today' : '') + '">' +
+      '<div class="calendar-day-num">' + d + '</div><div class="calendar-day-issues">';
+
+    var showCount = Math.min(dayIssues.length, 3);
+    for (var di = 0; di < showCount; di++) {
+      var ci = dayIssues[di];
+      html += '<div class="calendar-issue" onclick="openIssuePage(\'' + ci.id + '\')" style="border-left:3px solid ' + (STATUS_COLORS[ci.status] || '#6b7280') + '">' +
+        '<span class="calendar-issue-key">' + esc(issueKeyStr(ci)) + '</span></div>';
+    }
+    if (dayIssues.length > 3) {
+      html += '<span class="text-muted">+' + (dayIssues.length - 3) + ' more</span>';
+    }
+    html += '</div></div>';
+  }
+
+  var totalCells = startPad + totalDays;
+  var remainder = totalCells % 7;
+  if (remainder > 0) {
+    for (var rr = 0; rr < 7 - remainder; rr++) {
+      html += '<div class="calendar-day calendar-day-empty"></div>';
+    }
+  }
+  html += '</div>';
+  $('calendarGrid').innerHTML = html;
+}
+
+// ═══════════════════════════════════════════════════════════
+// REPORTS TAB
+// ═══════════════════════════════════════════════════════════
+function renderReports() {
+  var sel = $('reportSelector');
+  sel.onchange = function () { renderReportContent(sel.value); };
+  renderReportContent(sel.value);
+}
+
+async function renderReportContent(type) {
+  var c = $('reportContent');
+  c.innerHTML = '<p class="text-muted">Loading report\u2026</p>';
+
+  try {
+    if (type === 'burndown') {
+      var sprints = getSpaceSprints(S.currentSpace);
+      var activeSprint = sprints.find(function (sp) { return sp.status === 'active'; });
+      if (!activeSprint) { c.innerHTML = '<p class="placeholder-text">No active sprint for burndown chart.</p>'; return; }
+      var data = await api('/api/reports/sprint/' + activeSprint.id);
+      renderBurndownReport(c, data, activeSprint);
+    } else if (type === 'velocity') {
+      var data2 = await api('/api/reports/velocity?space_id=' + S.currentSpace);
+      renderVelocityReport(c, data2);
+    } else if (type === 'cumulative') {
+      var data3 = await api('/api/reports/status?space_id=' + S.currentSpace);
+      renderStatusReport(c, data3);
+    } else if (type === 'control') {
+      var data4 = await api('/api/reports/workload?space_id=' + S.currentSpace);
+      renderWorkloadReport(c, data4);
+    }
+  } catch (e) {
+    c.innerHTML = '<p class="text-muted">Failed to load report: ' + esc(e.message) + '</p>';
+  }
+}
+
+function renderBurndownReport(c, data, sprint) {
+  var issues = getSpaceIssues(S.currentSpace).filter(function (i) { return i.sprint_id == sprint.id; });
+  var total = issues.length;
+  var done = issues.filter(function (i) { return i.status === 'Done'; }).length;
+  var remaining = total - done;
+
+  c.innerHTML = '<div class="report-chart">' +
+    '<h4>Sprint Burndown: ' + esc(sprint.name) + '</h4>' +
+    '<div class="report-stats-row">' +
+    statCard('Total', total, '#174F96') +
+    statCard('Done', done, STATUS_COLORS['Done']) +
+    statCard('Remaining', remaining, STATUS_COLORS['In Progress']) +
+    '</div>' +
+    '<div class="bar-chart-vertical">' +
+    '<div class="bar-group"><div class="bar-col" style="height:' + (total ? 100 : 0) + '%;background:#174F96" title="Total: ' + total + '"></div><span>Total</span></div>' +
+    '<div class="bar-group"><div class="bar-col" style="height:' + (total ? Math.round(done / total * 100) : 0) + '%;background:' + STATUS_COLORS['Done'] + '" title="Done: ' + done + '"></div><span>Done</span></div>' +
+    '<div class="bar-group"><div class="bar-col" style="height:' + (total ? Math.round(remaining / total * 100) : 0) + '%;background:' + STATUS_COLORS['In Progress'] + '" title="Remaining: ' + remaining + '"></div><span>Remaining</span></div>' +
+    '</div></div>';
+}
+
+function renderVelocityReport(c, data) {
+  var sprints = Array.isArray(data) ? data : (data.sprints || []);
+  if (!sprints.length) { c.innerHTML = '<p class="placeholder-text">No completed sprints for velocity data.</p>'; return; }
+
+  var max = 1;
+  for (var i = 0; i < sprints.length; i++) {
+    var pts = sprints[i].completed_points || sprints[i].points || 0;
+    if (pts > max) max = pts;
+  }
+
+  var html = '<div class="report-chart"><h4>Velocity Chart</h4><div class="velocity-bars">';
+  for (var j = 0; j < sprints.length; j++) {
+    var sp = sprints[j];
+    var p = sp.completed_points || sp.points || 0;
+    var pct = Math.round((p / max) * 100);
+    html += '<div class="velocity-bar-group">' +
+      '<div class="velocity-bar" style="height:' + pct + '%;background:#174F96"></div>' +
+      '<span class="velocity-label">' + esc(sp.name || sp.sprint_name || '') + '</span>' +
+      '<span class="velocity-value">' + p + ' pts</span></div>';
+  }
+  html += '</div></div>';
+  c.innerHTML = html;
+}
+
+function renderStatusReport(c, data) {
+  var issues = getSpaceIssues(S.currentSpace);
+  var groups = ['To Do', 'In Progress', 'In Review', 'Done'].map(function (s) {
+    var apiCount = 0;
+    if (Array.isArray(data)) {
+      var found = data.find(function (x) { return x.status === s; });
+      if (found) apiCount = found.count;
+    }
+    return {
+      label: s,
+      count: apiCount || issues.filter(function (i) { return i.status === s; }).length,
+      color: STATUS_COLORS[s]
+    };
+  });
+  var total = groups.reduce(function (sum, g) { return sum + g.count; }, 0);
+  c.innerHTML = '<div class="report-chart"><h4>Status Distribution</h4>' + barChart(groups, total) + '</div>';
+}
+
+function renderWorkloadReport(c, data) {
+  var workloads = Array.isArray(data) ? data : (data.workloads || []);
+
+  if (!workloads.length) {
+    // Fallback: compute from local data
+    var issues = getSpaceIssues(S.currentSpace).filter(function (i) { return i.assignee_id; });
+    var byAssignee = {};
+    for (var i = 0; i < issues.length; i++) {
+      var u = findUser(issues[i].assignee_id);
+      var name = u ? u.name : 'Unknown';
+      byAssignee[name] = (byAssignee[name] || 0) + 1;
+    }
+    workloads = Object.keys(byAssignee).map(function (name) {
+      return { name: name, count: byAssignee[name] };
+    });
+  }
+
+  if (!workloads.length) { c.innerHTML = '<p class="placeholder-text">No workload data available.</p>'; return; }
+
+  var max = 1;
+  for (var j = 0; j < workloads.length; j++) {
+    var cnt = workloads[j].issue_count || workloads[j].count || 0;
+    if (cnt > max) max = cnt;
+  }
+
+  var html = '<div class="report-chart"><h4>Team Workload</h4>';
+  for (var k = 0; k < workloads.length; k++) {
+    var wk = workloads[k];
+    var count = wk.issue_count || wk.count || 0;
+    var pct = Math.round((count / max) * 100);
+    html += '<div class="bar-row">' +
+      '<span class="bar-label">' + esc(wk.name || wk.assignee_name || 'Unknown') + '</span>' +
+      '<div class="bar-track"><div class="bar-fill" style="width:' + pct + '%;background:#174F96"></div></div>' +
+      '<span class="bar-value">' + count + ' issues</span></div>';
+  }
+  html += '</div>';
+  c.innerHTML = html;
+}
+
+// ═══════════════════════════════════════════════════════════
+// ALL WORK TAB
+// ═══════════════════════════════════════════════════════════
+function renderAllWork() {
+  var search = ($('allWorkSearch').value || '').toLowerCase();
+  var issues = getSpaceIssues(S.currentSpace);
+
+  if (search) {
+    issues = issues.filter(function (i) {
+      return i.title.toLowerCase().indexOf(search) >= 0 ||
+        issueKeyStr(i).toLowerCase().indexOf(search) >= 0 ||
+        (i.assignee_name || '').toLowerCase().indexOf(search) >= 0;
+    });
+  }
+
+  // Sort
+  var col = S.allWorkSort.col;
+  var dir = S.allWorkSort.dir;
+  issues.sort(function (a, b) {
+    var va = col === 'key' ? a.id : (col === 'assignee' ? (a.assignee_name || '') : a[col]);
+    var vb = col === 'key' ? b.id : (col === 'assignee' ? (b.assignee_name || '') : b[col]);
+    if (va == null) va = '';
+    if (vb == null) vb = '';
+    if (typeof va === 'string') va = va.toLowerCase();
+    if (typeof vb === 'string') vb = vb.toLowerCase();
+    if (va < vb) return dir === 'asc' ? -1 : 1;
+    if (va > vb) return dir === 'asc' ? 1 : -1;
+    return 0;
+  });
+
+  var sortIcon = function (c) {
+    if (S.allWorkSort.col !== c) return '';
+    return S.allWorkSort.dir === 'asc' ? ' \u25B2' : ' \u25BC';
+  };
+  var th = function (label, c) {
+    return '<th class="sortable-th" data-sort-col="' + c + '">' + label + sortIcon(c) + '</th>';
+  };
+
+  var hasSelected = S.allWorkSelected.size > 0;
+  var html = '';
+
+  if (hasSelected) {
+    html += '<div class="bulk-bar"><span>' + S.allWorkSelected.size + ' selected</span>' +
+      '<select id="bulkStatusChange" class="input input-sm">' +
+      '<option value="">Change Status\u2026</option>' +
+      '<option value="To Do">To Do</option><option value="In Progress">In Progress</option>' +
+      '<option value="In Review">In Review</option><option value="Done">Done</option></select>' +
+      '<button class="btn btn-sm btn-danger" onclick="window._bulkDelete()">Delete</button></div>';
+  }
+
+  html += '<table class="data-table"><thead><tr>' +
+    '<th><input type="checkbox" id="allWorkSelectAll"' + (S.allWorkSelected.size === issues.length && issues.length > 0 ? ' checked' : '') + '></th>' +
+    th('Key', 'key') + th('Title', 'title') + th('Type', 'type') + th('Status', 'status') +
+    th('Priority', 'priority') + th('Assignee', 'assignee') + th('Sprint', 'sprint_id') +
+    th('Points', 'story_points') + th('Due Date', 'due_date') + th('Updated', 'updated_at') +
+    '</tr></thead><tbody>';
+
+  for (var i = 0; i < issues.length; i++) {
+    var iss = issues[i];
+    var assignee = findUser(iss.assignee_id);
+    var sprint = (S.data.sprints || []).find(function (sp) { return sp.id == iss.sprint_id; });
+    var checked = S.allWorkSelected.has(iss.id) ? ' checked' : '';
+    html += '<tr class="clickable-row">' +
+      '<td><input type="checkbox" data-issue-check="' + iss.id + '"' + checked + '></td>' +
+      '<td class="issue-key" onclick="openIssuePage(\'' + iss.id + '\')">' + esc(issueKeyStr(iss)) + '</td>' +
+      '<td onclick="openIssuePage(\'' + iss.id + '\')">' + esc(iss.title) + '</td>' +
+      '<td>' + typeIcon(iss.type) + ' ' + cap(iss.type) + '</td>' +
+      '<td>' + statusBadge(iss.status) + '</td>' +
+      '<td>' + priorityBadge(iss.priority) + '</td>' +
+      '<td>' + (assignee ? avatarHtml(assignee, 24) + ' ' + esc(assignee.name) : '<span class="text-muted">Unassigned</span>') + '</td>' +
+      '<td>' + (sprint ? esc(sprint.name) : '\u2014') + '</td>' +
+      '<td>' + (iss.story_points != null ? iss.story_points : '\u2014') + '</td>' +
+      '<td>' + (fmtDateShort(iss.due_date) || '\u2014') + '</td>' +
+      '<td class="text-muted">' + relativeTime(iss.updated_at) + '</td></tr>';
+  }
+  html += '</tbody></table>';
+  $('allWorkTable').innerHTML = html;
+
+  // Bind sorting
+  qsa('.sortable-th').forEach(function (thEl) {
+    thEl.onclick = function () {
+      var c = thEl.dataset.sortCol;
+      if (S.allWorkSort.col === c) {
+        S.allWorkSort.dir = S.allWorkSort.dir === 'asc' ? 'desc' : 'asc';
+      } else {
+        S.allWorkSort.col = c;
+        S.allWorkSort.dir = 'asc';
+      }
+      renderAllWork();
+    };
+  });
+
+  // Select all checkbox
+  var selAll = $('allWorkSelectAll');
+  if (selAll) {
+    selAll.onchange = function () {
+      if (selAll.checked) {
+        issues.forEach(function (i) { S.allWorkSelected.add(i.id); });
+      } else {
+        S.allWorkSelected.clear();
+      }
+      renderAllWork();
+    };
+  }
+
+  // Individual checkboxes
+  qsa('[data-issue-check]').forEach(function (cb) {
+    cb.onchange = function () {
+      var id = cb.dataset.issueCheck;
+      if (cb.checked) S.allWorkSelected.add(id);
+      else S.allWorkSelected.delete(id);
+      renderAllWork();
+    };
+  });
+
+  // Bulk status change
+  var bulkSel = $('bulkStatusChange');
+  if (bulkSel) {
+    bulkSel.onchange = async function () {
+      var status = bulkSel.value;
+      if (!status) return;
+      var ids = Array.from(S.allWorkSelected);
+      await api('/api/issues/bulk', 'POST', { ids: ids, updates: { status: status } });
+      S.allWorkSelected.clear();
+      await refreshData();
+      renderAllWork();
+      toast('Updated ' + ids.length + ' issues');
+    };
+  }
+}
+
+window._bulkDelete = async function () {
+  var ids = Array.from(S.allWorkSelected);
+  var ok = await confirmDialog('Delete ' + ids.length + ' issue(s)? This cannot be undone.');
+  if (!ok) return;
+  for (var i = 0; i < ids.length; i++) {
+    await api('/api/issues/' + ids[i], 'DELETE');
+  }
+  S.allWorkSelected.clear();
+  await refreshData();
+  renderAllWork();
+  toast('Deleted ' + ids.length + ' issues');
+};
+
+// ═══════════════════════════════════════════════════════════
+// FILTERS TAB
+// ═══════════════════════════════════════════════════════════
+function renderFilters() {
+  var filters = (S.data.saved_filters || []).filter(function (f) {
+    return f.space_id == S.currentSpace || f.user_id == S.currentUser;
+  });
+
+  if (!filters.length) {
+    $('filtersList').innerHTML = '<p class="placeholder-text">No saved filters. Create one to save your search criteria.</p>';
+    return;
+  }
+
+  var html = '';
+  for (var i = 0; i < filters.length; i++) {
+    var f = filters[i];
+    var conditions = [];
+    try {
+      conditions = f.conditions ? (typeof f.conditions === 'string' ? JSON.parse(f.conditions) : f.conditions) : [];
+    } catch (e) { conditions = []; }
+    var condPreview = conditions.length
+      ? conditions.map(function (c) { return c.field + ' ' + c.operator + ' ' + c.value; }).join(', ')
+      : 'No conditions';
+
+    html += '<div class="filter-card">' +
+      '<div class="filter-card-header"><h4>' + esc(f.name) + '</h4><div class="filter-card-badges">' +
+      (f.is_shared ? '<span class="badge badge-muted">Shared</span>' : '') +
+      (f.is_pinned ? '<span class="badge badge-muted">Pinned</span>' : '') +
+      '</div></div>' +
+      '<p class="text-muted">' + esc(condPreview) + '</p>' +
+      '<div class="filter-card-actions">' +
+      '<button class="btn btn-sm btn-outline" onclick="window._applyFilter(\'' + f.id + '\')">Apply</button>' +
+      '<button class="btn btn-sm btn-outline" onclick="window._editFilter(\'' + f.id + '\')">Edit</button>' +
+      '<button class="btn btn-sm btn-outline" onclick="window._deleteFilter(\'' + f.id + '\')">Delete</button>' +
+      '</div></div>';
+  }
+  $('filtersList').innerHTML = html;
+}
+
+window._applyFilter = function (filterId) {
+  var f = (S.data.saved_filters || []).find(function (x) { return x.id == filterId; });
+  if (!f) return;
+  renderTab('allwork');
+  try {
+    var conditions = f.conditions ? (typeof f.conditions === 'string' ? JSON.parse(f.conditions) : f.conditions) : [];
+    if (conditions.length && conditions[0].value) {
+      $('allWorkSearch').value = conditions[0].value;
+      renderAllWork();
+    }
+  } catch (e) { /* ignore parse errors */ }
+};
+
+window._editFilter = function (filterId) {
+  var f = (S.data.saved_filters || []).find(function (x) { return x.id == filterId; });
+  if (!f) return;
+  $('filterId').value = f.id;
+  $('filterSpaceId').value = f.space_id || S.currentSpace;
+  $('filterNameInput').value = f.name || '';
+  $('filterShared').checked = !!f.is_shared;
+  $('filterPinned').checked = !!f.is_pinned;
+  $('filterModalTitle').textContent = 'Edit Filter';
+  var conditions = [];
+  try {
+    conditions = f.conditions ? (typeof f.conditions === 'string' ? JSON.parse(f.conditions) : f.conditions) : [];
+  } catch (e) { /* ignore */ }
+  renderFilterConditions(conditions);
+  openModal('modal-filter');
+};
+
+window._deleteFilter = async function (filterId) {
+  var ok = await confirmDialog('Delete this filter?');
+  if (!ok) return;
+  await api('/api/filters/' + filterId, 'DELETE');
+  await refreshData();
+  renderFilters();
+  toast('Filter deleted');
+};
+
+function renderFilterConditions(conditions) {
+  var c = $('filterConditions');
+  var html = '';
+  for (var i = 0; i < conditions.length; i++) {
+    var cond = conditions[i];
+    html += '<div class="filter-condition-row" data-cond-idx="' + i + '">' +
+      '<select class="input input-sm fc-field">' +
+      '<option value="status"' + (cond.field === 'status' ? ' selected' : '') + '>Status</option>' +
+      '<option value="priority"' + (cond.field === 'priority' ? ' selected' : '') + '>Priority</option>' +
+      '<option value="type"' + (cond.field === 'type' ? ' selected' : '') + '>Type</option>' +
+      '<option value="assignee_id"' + (cond.field === 'assignee_id' ? ' selected' : '') + '>Assignee</option>' +
+      '<option value="labels"' + (cond.field === 'labels' ? ' selected' : '') + '>Labels</option></select>' +
+      '<select class="input input-sm fc-op">' +
+      '<option value="equals"' + (cond.operator === 'equals' ? ' selected' : '') + '>equals</option>' +
+      '<option value="not_equals"' + (cond.operator === 'not_equals' ? ' selected' : '') + '>not equals</option>' +
+      '<option value="contains"' + (cond.operator === 'contains' ? ' selected' : '') + '>contains</option></select>' +
+      '<input type="text" class="input input-sm fc-value" value="' + esc(cond.value || '') + '">' +
+      '<button type="button" class="btn btn-sm btn-outline" onclick="this.closest(\'.filter-condition-row\').remove()">x</button></div>';
+  }
+  c.innerHTML = html;
+}
+
+// ═══════════════════════════════════════════════════════════
+// SPACE SETTINGS TAB (with sub-tabs: General, People, Custom Fields)
+// ═══════════════════════════════════════════════════════════
+var _settingsActiveTab = 'general';
+
+function renderSpaceSettings(subTab) {
+  var space = getSpace(S.currentSpace);
+  if (!space) return;
+  if (subTab) _settingsActiveTab = subTab;
+  // Update tab bar active state
+  qsa('#settingsTabBar .tab-btn').forEach(function (btn) {
+    btn.classList.toggle('active', btn.dataset.stab === _settingsActiveTab);
+  });
+  // Render active sub-tab content
+  switch (_settingsActiveTab) {
+    case 'general': renderSettingsGeneral(space); break;
+    case 'people': renderSettingsPeople(space); break;
+    case 'customfields': renderSettingsCustomFields(space); break;
+    default: renderSettingsGeneral(space);
+  }
+}
+
+window._switchSettingsTab = function (tab) {
+  _settingsActiveTab = tab;
+  renderSpaceSettings(tab);
+};
+
+function renderSettingsGeneral(space) {
+  $('settingsTabContent').innerHTML =
+    '<div class="settings-section"><h3>General</h3>' +
+    '<p><strong>Name:</strong> ' + esc(space.name) + '</p>' +
+    '<p><strong>Key:</strong> ' + esc(space.key) + '</p>' +
+    '<p><strong>Description:</strong> ' + esc(space.description || 'No description') + '</p>' +
+    '<p><strong>Icon:</strong> ' + esc(space.icon || 'None') + '</p>' +
+    '<p><strong>Color:</strong> <span class="space-dot" style="background:' + (space.color || '#174F96') + ';display:inline-block;vertical-align:middle"></span> ' + esc(space.color || '#174F96') + '</p>' +
+    '<p><strong>Type:</strong> ' + cap(space.space_type || 'scrum') + '</p>' +
+    '<p><strong>Visibility:</strong> ' + visLabel(space.visibility) + '</p>' +
+    '<div class="settings-actions">' +
+    '<button class="btn btn-outline" onclick="window._editSpaceSettings()">Edit Space</button>' +
+    '<button class="btn btn-danger" onclick="window._deleteSpace(\'' + space.id + '\')">Delete Space</button></div></div>';
+}
+
+function renderSettingsPeople(space) {
+  var memberRecs = (S.data.space_members || []).filter(function (m) { return m.space_id == space.id; });
+  var roles = [
+    { value: 'site_admin', label: 'Site Admin' },
+    { value: 'manager',    label: 'Manager'    },
+    { value: 'member',     label: 'Member'     },
+    { value: 'viewer',     label: 'Viewer'     }
+  ];
+
+  var rowsHtml = '';
+  for (var i = 0; i < memberRecs.length; i++) {
+    var rec = memberRecs[i];
+    var user = findUser(rec.user_id);
+    if (!user) continue;
+    var role = (rec.role || 'member').toLowerCase();
+    var joined = fmtDate(rec.joined_at || rec.created_at);
+
+    var roleOptions = '';
+    for (var r = 0; r < roles.length; r++) {
+      roleOptions += '<option value="' + roles[r].value + '"' + (roles[r].value === role ? ' selected' : '') + '>' + roles[r].label + '</option>';
+    }
+
+    rowsHtml += '<tr>' +
+      '<td>' + avatarHtml(user, 28) + '</td>' +
+      '<td>' + esc(user.name) + '</td>' +
+      '<td class="text-muted">' + esc(user.email || '') + '</td>' +
+      '<td><select class="input input-sm people-role-select" data-member-id="' + rec.id + '" data-user-id="' + user.id + '" style="max-width:120px">' + roleOptions + '</select></td>' +
+      '<td class="text-muted text-sm">' + joined + '</td>' +
+      '<td><button class="btn btn-outline btn-sm people-remove-btn" data-member-id="' + rec.id + '" data-user-name="' + esc(user.name) + '">Remove</button></td>' +
+      '</tr>';
+  }
+
+  var html = '<div class="flex items-center justify-between mb-16">' +
+    '<h3 style="margin:0">Members</h3>' +
+    '<button class="btn btn-primary btn-sm" id="inviteMemberBtnSettings">+ Add User</button>' +
+    '</div>' +
+    '<div class="table-container"><table class="data-table" style="width:100%"><thead><tr>' +
+    '<th style="width:40px"></th><th>Name</th><th>Email</th><th>Role</th><th>Joined</th><th style="width:80px">Actions</th>' +
+    '</tr></thead><tbody>' + (rowsHtml || '<tr><td colspan="6" class="text-muted" style="text-align:center;padding:24px">No members yet</td></tr>') + '</tbody></table></div>';
+
+  $('settingsTabContent').innerHTML = html;
+
+  // Invite member button
+  var invBtn = $('inviteMemberBtnSettings');
+  if (invBtn) {
+    invBtn.onclick = function () { openInviteMemberModal(); };
+  }
+
+  // Role change handlers
+  qsa('.people-role-select').forEach(function (sel) {
+    sel.addEventListener('change', async function () {
+      var memberId = sel.dataset.memberId;
+      var newRole = sel.value;
+      try {
+        await api('/api/space-members/' + memberId, 'PUT', { role: newRole });
+        toast('Role updated');
+      } catch (e) { /* error shown by api() */ }
+    });
+  });
+
+  // Remove member handlers
+  qsa('.people-remove-btn').forEach(function (btn) {
+    btn.addEventListener('click', async function () {
+      var memberId = btn.dataset.memberId;
+      var userName = btn.dataset.userName;
+      var ok = await confirmDialog('Remove ' + userName + ' from this space?');
+      if (!ok) return;
+      try {
+        await api('/api/space-members/' + memberId, 'DELETE');
+        await refreshData();
+        renderSettingsPeople(getSpace(S.currentSpace));
+        renderSidebar();
+        toast('Member removed');
+      } catch (e) { /* error shown by api() */ }
+    });
+  });
+}
+
+function renderSettingsCustomFields(space) {
+  var fields = (S.data.custom_fields || []).filter(function (f) { return f.space_id == space.id; });
+
+  var rowsHtml = '';
+  for (var i = 0; i < fields.length; i++) {
+    var f = fields[i];
+    var options = f.options ? (Array.isArray(f.options) ? f.options.join(', ') : f.options) : '\u2014';
+    rowsHtml += '<tr>' +
+      '<td>' + esc(f.name) + '</td>' +
+      '<td><span class="badge badge-muted">' + esc(f.field_type || f.type) + '</span></td>' +
+      '<td>' + (f.is_required ? '\u2705 Yes' : 'No') + '</td>' +
+      '<td class="text-muted text-sm">' + esc(options) + '</td>' +
+      '<td>' +
+        '<button class="btn btn-outline btn-sm cf-edit-btn" data-field-id="' + f.id + '">Edit</button> ' +
+        '<button class="btn btn-outline btn-sm text-danger cf-delete-btn" data-field-id="' + f.id + '" data-field-name="' + esc(f.name) + '">Delete</button>' +
+      '</td>' +
+      '</tr>';
+  }
+
+  var html = '<div class="flex items-center justify-between mb-16">' +
+    '<h3 style="margin:0">Custom Fields</h3>' +
+    '<button class="btn btn-primary btn-sm" id="addCustomFieldBtnSettings">+ Add Field</button>' +
+    '</div>' +
+    '<div class="table-container"><table class="data-table" style="width:100%"><thead><tr>' +
+    '<th>Name</th><th>Type</th><th>Required</th><th>Options</th><th style="width:140px">Actions</th>' +
+    '</tr></thead><tbody>' + (rowsHtml || '<tr><td colspan="5" class="text-muted" style="text-align:center;padding:24px">No custom fields yet</td></tr>') + '</tbody></table></div>';
+
+  $('settingsTabContent').innerHTML = html;
+
+  // Add field button
+  $('addCustomFieldBtnSettings').onclick = function () { openCustomFieldModal(); };
+
+  // Edit buttons
+  qsa('.cf-edit-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var fieldId = btn.dataset.fieldId;
+      var field = fields.find(function (f) { return f.id == fieldId; });
+      if (field) openCustomFieldModal(field);
+    });
+  });
+
+  // Delete buttons
+  qsa('.cf-delete-btn').forEach(function (btn) {
+    btn.addEventListener('click', async function () {
+      var fieldId = btn.dataset.fieldId;
+      var fieldName = btn.dataset.fieldName;
+      var ok = await confirmDialog('Delete custom field "' + fieldName + '"?');
+      if (!ok) return;
+      try {
+        await api('/api/custom-fields/' + fieldId, 'DELETE');
+        await refreshData();
+        renderSettingsCustomFields(getSpace(S.currentSpace));
+        toast('Custom field deleted');
+      } catch (e) { /* error shown by api() */ }
+    });
+  });
+}
+
+window._editSpaceSettings = function () {
+  var space = getSpace(S.currentSpace);
+  if (space) openSpaceModal(space);
+};
+
+window._deleteSpace = async function (spaceId) {
+  var space = getSpace(spaceId);
+  var spaceName = space ? space.name : 'this space';
+  var ok = await confirmDialog('Delete "' + spaceName + '"? All issues, sprints, and data will be permanently lost.');
+  if (!ok) return;
+  try {
+    await api('/api/spaces/' + spaceId, 'DELETE');
+    await refreshData();
+    if (S.currentSpace === spaceId) S.currentSpace = null;
+    navigateTo('home');
+    renderSidebar();
+    popupAlert('Space Deleted', '"' + spaceName + '" has been deleted successfully.', 'success');
+  } catch (e) {
+    popupAlert('Delete Failed', 'Could not delete the space. Please try again.', 'error');
+  }
+};
+
+// ═══════════════════════════════════════════════════════════
+// SPACE CONTEXT MENU (3-dot on sidebar items)
+// ═══════════════════════════════════════════════════════════
+function showSpaceContextMenu(anchorBtn, spaceId) {
+  // Remove any existing context menu
+  var existing = qs('.space-context-menu');
+  if (existing) existing.remove();
+
+  var starred = isFavorited(spaceId);
+  var starLabel = starred ? '\u2B50 Remove from starred' : '\u2B50 Add to starred';
+
+  var menu = document.createElement('div');
+  menu.className = 'space-context-menu';
+  menu.innerHTML =
+    '<div class="space-context-menu-item" data-action="star">' + starLabel + '</div>' +
+    '<div class="space-context-menu-item" data-action="people">\uD83D\uDC65 Manage people</div>' +
+    '<div class="space-context-menu-item" data-action="settings">\u2699\uFE0F Space settings</div>' +
+    '<div class="space-context-menu-item danger" data-action="delete">\uD83D\uDDD1\uFE0F Delete space</div>';
+
+  // Position relative to the button
+  var rect = anchorBtn.getBoundingClientRect();
+  menu.style.position = 'fixed';
+  menu.style.left = rect.right + 4 + 'px';
+  menu.style.top = rect.top + 'px';
+  document.body.appendChild(menu);
+
+  // Adjust if menu goes off screen
+  var menuRect = menu.getBoundingClientRect();
+  if (menuRect.right > window.innerWidth) {
+    menu.style.left = (rect.left - menuRect.width - 4) + 'px';
+  }
+  if (menuRect.bottom > window.innerHeight) {
+    menu.style.top = (window.innerHeight - menuRect.height - 8) + 'px';
+  }
+
+  // Handle menu item clicks
+  menu.addEventListener('click', async function (e) {
+    var item = e.target.closest('.space-context-menu-item');
+    if (!item) return;
+    var action = item.dataset.action;
+    menu.remove();
+
+    switch (action) {
+      case 'star':
+        await api('/api/spaces/' + spaceId + '/favorite', 'POST', { user_id: S.currentUser });
+        await refreshData();
+        renderSidebar();
+        toast('Updated starred spaces');
+        break;
+      case 'people':
+        _settingsActiveTab = 'people';
+        navigateToSpace(spaceId, 'space-settings');
+        break;
+      case 'settings':
+        _settingsActiveTab = 'general';
+        navigateToSpace(spaceId, 'space-settings');
+        break;
+      case 'delete':
+        window._deleteSpace(spaceId);
+        break;
+    }
+  });
+
+  // Close on outside click
+  function closeMenu(e) {
+    if (!menu.contains(e.target) && e.target !== anchorBtn) {
+      menu.remove();
+      document.removeEventListener('click', closeMenu);
+    }
+  }
+  setTimeout(function () {
+    document.addEventListener('click', closeMenu);
+  }, 0);
+}
+
+// (People management is now inside renderSettingsPeople, within Space Settings)
+
+function openInviteMemberModal() {
+  var space = getSpace(S.currentSpace);
+  if (!space) return;
+
+  // Get users not already members
+  var memberUserIds = (S.data.space_members || [])
+    .filter(function (m) { return m.space_id == space.id; })
+    .map(function (m) { return m.user_id; });
+  var availableUsers = (S.data.users || []).filter(function (u) {
+    return u.is_active !== false && memberUserIds.indexOf(u.id) === -1;
+  });
+
+  var sel = $('inviteMemberSelect');
+  var optionsHtml = '<option value="">— Select a user —</option>';
+  for (var i = 0; i < availableUsers.length; i++) {
+    var u = availableUsers[i];
+    optionsHtml += '<option value="' + u.id + '">' + esc(u.name) + '  ·  ' + esc(u.email || '') + '</option>';
+  }
+  sel.innerHTML = optionsHtml;
+  $('inviteMemberRole').value = 'member';
+
+  // Show user preview card when a user is selected
+  sel.onchange = function () {
+    var preview = $('selectedUserPreview');
+    var uid = sel.value;
+    var u = uid && (S.data.users || []).find(function(x){ return x.id === uid; });
+    if (!u) { preview.style.display = 'none'; return; }
+    var initials = u.name ? u.name.split(' ').map(function(p){ return p[0]; }).join('').toUpperCase().slice(0,2) : '?';
+    var bg = u.color || '#2563eb';
+    preview.style.display = 'flex';
+    preview.innerHTML =
+      '<div style="width:36px;height:36px;border-radius:50%;background:' + bg + ';display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;color:#fff;flex-shrink:0">' + initials + '</div>' +
+      '<div><div style="font-weight:600;font-size:13px">' + esc(u.name) + '</div>' +
+      '<div style="font-size:12px;color:var(--text3)">' + esc(u.email || '') + '</div></div>';
+  };
+
+  openModal('modal-invite-member');
+}
+window.openInviteMemberModal = openInviteMemberModal;
+
+$('inviteMemberForm').addEventListener('submit', async function (e) {
+  e.preventDefault();
+  var userId = $('inviteMemberSelect').value;
+  var role = $('inviteMemberRole').value;
+  if (!userId) { toast('Please select a user', 'error'); return; }
+  try {
+    await api('/api/space-members', 'POST', { space_id: S.currentSpace, user_id: userId, role: role });
+    await refreshData();
+    closeModal('modal-invite-member');
+    if (S.currentTab === 'space-settings' && _settingsActiveTab === 'people') {
+      renderSettingsPeople(getSpace(S.currentSpace));
+    }
+    renderSidebar();
+    popupAlert('User Added', 'User has been added to the space successfully.', 'success');
+  } catch (e) { /* error shown by api() */ }
+});
+
+// (Custom Fields management is now inside renderSettingsCustomFields, within Space Settings)
+
+function openCustomFieldModal(field) {
+  if (field) {
+    $('customFieldModalTitle').textContent = 'Edit Custom Field';
+    $('customFieldId').value = field.id;
+    $('customFieldName').value = field.name || '';
+    $('customFieldType').value = field.field_type || field.type || 'text';
+    $('customFieldRequired').checked = !!(field.is_required || field.required);
+    var opts = field.options ? (Array.isArray(field.options) ? field.options.join(', ') : field.options) : '';
+    $('customFieldOptions').value = opts;
+  } else {
+    $('customFieldModalTitle').textContent = 'Add Custom Field';
+    $('customFieldId').value = '';
+    $('customFieldName').value = '';
+    $('customFieldType').value = 'text';
+    $('customFieldRequired').checked = false;
+    $('customFieldOptions').value = '';
+  }
+  toggleCustomFieldOptions();
+  openModal('modal-custom-field');
+}
+window.openCustomFieldModal = openCustomFieldModal;
+
+function toggleCustomFieldOptions() {
+  var type = $('customFieldType').value;
+  var show = (type === 'select' || type === 'multi_select');
+  $('customFieldOptionsGroup').hidden = !show;
+}
+
+$('customFieldType').addEventListener('change', toggleCustomFieldOptions);
+
+$('customFieldForm').addEventListener('submit', async function (e) {
+  e.preventDefault();
+  var id = $('customFieldId').value;
+  var name = $('customFieldName').value.trim();
+  var type = $('customFieldType').value;
+  var required = $('customFieldRequired').checked;
+  var optionsRaw = $('customFieldOptions').value.trim();
+  var options = (type === 'select' || type === 'multi_select') && optionsRaw
+    ? optionsRaw.split(',').map(function (o) { return o.trim(); }).filter(Boolean)
+    : [];
+
+  if (!name) { toast('Field name is required', 'error'); return; }
+
+  var payload = { space_id: S.currentSpace, name: name, field_type: type, is_required: required, options: options };
+  try {
+    if (id) {
+      await api('/api/custom-fields/' + id, 'PUT', payload);
+    } else {
+      await api('/api/custom-fields', 'POST', payload);
+    }
+    await refreshData();
+    closeModal('modal-custom-field');
+    if (S.currentTab === 'space-settings' && _settingsActiveTab === 'customfields') {
+      renderSettingsCustomFields(getSpace(S.currentSpace));
+    }
+    toast(id ? 'Custom field updated' : 'Custom field created');
+  } catch (e) { /* error shown by api() */ }
+});
+
+// ═══════════════════════════════════════════════════════════
+// ISSUE DRAWER (open)
+// ═══════════════════════════════════════════════════════════
+async function openDrawer(issueId) {
+  S.drawerIssueId = issueId;
+  var issue;
+  try {
+    issue = await api('/api/issues/' + issueId);
+  } catch (e) { return; }
+
+  $('issueDrawer').removeAttribute('hidden');
+
+  // Parent breadcrumb for subtasks
+  var parentCrumb = $('drawerParentBreadcrumb');
+  if (issue.parent_id && issue.parent_key) {
+    parentCrumb.innerHTML = '<span class="drawer-crumb-icon">' + typeIcon(issue.parent_type || 'task') + '</span>' +
+      '<a class="drawer-crumb-link" onclick="openIssuePage(\'' + issue.parent_id + '\')">' + esc(issue.parent_key) + '</a>' +
+      ' <span class="drawer-crumb-sep">/</span> ' +
+      '<span class="drawer-crumb-icon">' + typeIcon(issue.type) + '</span>' +
+      '<span>' + esc(issue.key) + '</span>';
+    parentCrumb.style.display = '';
+  } else {
+    parentCrumb.style.display = 'none';
+    parentCrumb.innerHTML = '';
+  }
+
+  $('drawerKey').textContent = issue.key || (issue.project_key ? issue.project_key + '-?' : '#' + issue.id);
+  $('drawerType').textContent = typeLabel(issue.type);
+  $('drawerType').className = 'badge badge-type badge-type-' + (issue.type || 'task');
+  $('drawerTitle').textContent = issue.title || '';
+  $('drawerDesc').textContent = issue.description || '';
+
+  $('drawerStatus').value = issue.status || 'To Do';
+  $('drawerPriority').value = issue.priority || 'medium';
+
+  var spaceId = issue.space_id || S.currentSpace;
+  var members = getSpaceMembers(spaceId);
+  if (!members.length) members = S.data.users || [];
+  populateUserSelect($('drawerAssignee'), members, issue.assignee_id);
+  populateUserSelect($('drawerReporter'), members, issue.reporter_id);
+
+  var sprints = (S.data.sprints || []).filter(function (sp) { return sp.space_id == spaceId; });
+  populateSprintSelect($('drawerSprint'), sprints, issue.sprint_id);
+
+  $('drawerLabels').value = issue.labels || '';
+  $('drawerPoints').value = issue.story_points != null ? issue.story_points : '';
+  $('drawerStartDate').value = fmtDateISO(issue.start_date);
+  $('drawerDueDate').value = fmtDateISO(issue.due_date);
+  // Estimate field removed
+
+  var totalSpent = 0;
+  var worklogs = issue.worklogs || [];
+  for (var w = 0; w < worklogs.length; w++) totalSpent += (worklogs[w].time_spent || 0);
+  $('drawerTimeSpent').textContent = fmtMins(totalSpent);
+
+  // Set current user avatar in comment box
+  var curUser = findUser(S.currentUser);
+  if (curUser) {
+    $('drawerCommentAvatar').innerHTML = '';
+    $('drawerCommentAvatar').style.background = curUser.color || '#6b7280';
+    $('drawerCommentAvatar').textContent = initials(curUser.name);
+    $('drawerCommentAvatar').style.color = '#fff';
+    $('drawerCommentAvatar').style.display = 'flex';
+    $('drawerCommentAvatar').style.alignItems = 'center';
+    $('drawerCommentAvatar').style.justifyContent = 'center';
+    $('drawerCommentAvatar').style.fontSize = '11px';
+    $('drawerCommentAvatar').style.fontWeight = '700';
+  }
+
+  // Render linked issues
+  renderDrawerLinks(issue);
+
+  renderDrawerSubtasks(issue.subtasks || []);
+  // Reset to "All" tab on open, sync data-active-tab attribute
+  document.querySelectorAll('[data-activity-tab]').forEach(function(t){
+    t.classList.toggle('active', t.dataset.activityTab === 'all');
+  });
+  var actBody = $('activitySectionBody');
+  if (actBody) actBody.dataset.activeTab = 'all';
+  renderDrawerActivity(issue);
+  renderDrawerCustomFields(issue.custom_field_values || []);
+
+  $('drawerCreated').textContent = fmtDateTime(issue.created_at);
+  $('drawerUpdated').textContent = fmtDateTime(issue.updated_at);
+
+  bindDrawerEdits(issue);
+}
+window.openDrawer = openDrawer;
+
+function bindDrawerEdits(issue) {
+  var issueId = issue.id;
+  // Pending changes — accumulate edits, save all at once when Save button clicked
+  var pending = {};
+
+  function markDirty(field, value) {
+    pending[field] = value;
+    $('drawerSaveBtn').style.display = '';
+  }
+
+  // Store issueId on the Save button so saveDrawerChanges() can read it
+  $('drawerSaveBtn').dataset.issueId = issueId;
+
+  $('drawerStatus').onchange    = function () { markDirty('status',      $('drawerStatus').value); };
+  $('drawerPriority').onchange  = function () { markDirty('priority',    $('drawerPriority').value); };
+  $('drawerAssignee').onchange  = function () { markDirty('assignee_id', $('drawerAssignee').value || null); };
+  $('drawerReporter').onchange  = function () { markDirty('reporter_id', $('drawerReporter').value || null); };
+  $('drawerSprint').onchange    = function () { markDirty('sprint_id',   $('drawerSprint').value || null); };
+  $('drawerLabels').oninput     = function () { markDirty('labels',      $('drawerLabels').value); };
+  $('drawerPoints').oninput     = function () {
+    markDirty('story_points', $('drawerPoints').value ? parseInt($('drawerPoints').value, 10) : null);
+  };
+  $('drawerStartDate').onchange = function () { markDirty('start_date',  $('drawerStartDate').value || null); };
+  $('drawerDueDate').onchange   = function () { markDirty('due_date',    $('drawerDueDate').value || null); };
+  // Estimate field removed
+
+  $('drawerTitle').oninput = function () {
+    var title = $('drawerTitle').textContent.trim();
+    if (title) markDirty('title', title);
+  };
+  $('drawerDesc').oninput = function () {
+    markDirty('description', $('drawerDesc').textContent.trim());
+  };
+
+  // Expose pending to the global save handler
+  window._drawerPending = pending;
+
+  $('drawerCommentSubmit').onclick = async function () {
+    var body = $('drawerCommentInput').value.trim();
+    if (!body) return;
+    await api('/api/comments', 'POST', { issue_id: issueId, user_id: S.currentUser, body: body });
+    $('drawerCommentInput').value = '';
+    // Re-fetch full issue so worklogs + history are preserved in _drawerIssueData
+    var updated = await api('/api/issues/' + issueId);
+    if (updated) renderDrawerActivity(updated);
+    toast('Comment added');
+  };
+
+  $('drawerLogTimeBtn').onclick = function () {
+    $('worklogIssueId').value = issueId;
+    $('worklogDate').value = fmtDateISO(new Date());
+    $('worklogHours').value = 0;
+    $('worklogMinutes').value = 0;
+    $('worklogDesc').value = '';
+    $('worklogBillable').checked = true;
+    openModal('modal-worklog');
+  };
+}
+
+function renderDrawerSubtasks(subtasks) {
+  var c = $('drawerSubtasks');
+  var html = '';
+  if (subtasks && subtasks.length) {
+    // Progress bar
+    var done = subtasks.filter(function(s){ return s.status === 'Done'; }).length;
+    var pct = Math.round(done / subtasks.length * 100);
+    html += '<div class="subtask-progress" style="margin-bottom:8px">' +
+      '<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text2);margin-bottom:3px">' +
+      '<span>' + done + ' of ' + subtasks.length + ' done</span><span>' + pct + '%</span></div>' +
+      '<div style="height:4px;background:var(--bg4);border-radius:2px;overflow:hidden">' +
+      '<div style="height:100%;width:' + pct + '%;background:var(--success);border-radius:2px;transition:width .3s"></div></div></div>';
+    for (var i = 0; i < subtasks.length; i++) {
+      var st = subtasks[i];
+      var isDone = st.status === 'Done';
+      html += '<div class="subtask-row" style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:4px;cursor:pointer;border-bottom:1px solid var(--border)" ' +
+        'onmouseenter="this.style.background=\'var(--bg3)\'" onmouseleave="this.style.background=\'\'">' +
+        '<input type="checkbox" ' + (isDone ? 'checked' : '') + ' onclick="event.stopPropagation();window._toggleSubtaskDone(\'' + st.id + '\',this.checked)" style="width:16px;height:16px;cursor:pointer;accent-color:var(--success)">' +
+        '<span class="subtask-key" style="font-size:11px;font-weight:700;color:var(--accent);min-width:48px;cursor:pointer" onclick="event.stopPropagation();openIssuePage(\'' + st.id + '\')">' + esc(st.key || '') + '</span>' +
+        '<span style="flex:1;font-size:13px;' + (isDone ? 'text-decoration:line-through;color:var(--text3)' : '') + '" onclick="openIssuePage(\'' + st.id + '\')">' + esc(st.title) + '</span>' +
+        statusBadge(st.status) +
+        '<button class="btn-icon" style="width:20px;height:20px;font-size:12px;opacity:0.5" onclick="event.stopPropagation();window._deleteSubtask(\'' + st.id + '\')" title="Delete subtask">\u2715</button>' +
+        '</div>';
+    }
+  } else {
+    html += '<p class="text-muted text-sm" style="margin-bottom:4px">No subtasks yet</p>';
+  }
+  // Inline create form
+  html += '<div id="subtaskCreateArea" style="margin-top:8px">' +
+    '<button class="btn btn-outline btn-sm" id="subtaskAddBtn" onclick="window._showSubtaskInput()" style="gap:4px">\uD83D\uDCCC + Add subtask</button>' +
+    '<div id="subtaskInputRow" style="display:none;gap:8px;align-items:center;margin-top:6px">' +
+    '<input type="text" id="subtaskTitleInput" placeholder="What needs to be done?" class="input" style="flex:1;font-size:12px;padding:6px 8px" onkeydown="if(event.key===\'Enter\'){event.preventDefault();window._submitSubtask()}">' +
+    '<button class="btn btn-primary btn-sm" onclick="window._submitSubtask()">Create</button>' +
+    '<button class="btn btn-outline btn-sm" onclick="window._hideSubtaskInput()">Cancel</button>' +
+    '</div></div>';
+  c.innerHTML = html;
+}
+
+window._showSubtaskInput = function() {
+  // Open full Create Issue modal pre-configured as subtask linked to parent
+  var parentId = S.drawerIssueId;
+  var parentIssue = parentId && S.data.issues && S.data.issues.find(function(i){ return i.id === parentId; });
+  var spaceId = parentIssue ? parentIssue.space_id : S.currentSpace;
+
+  resetIssueForm();
+  $('issueSpaceId').value = spaceId;
+  $('issueParentId').value = parentId || '';
+  $('issueType').value = 'subtask';
+  $('issuePriority').value = 'medium';
+  $('issueModalTitle').textContent = 'Create Subtask' + (parentIssue ? ' — linked to ' + (parentIssue.key || parentIssue.id) : '');
+  populateIssueFormSelects();
+  // Pre-fill sprint and assignee from parent
+  if (parentIssue) {
+    if (parentIssue.sprint_id) $('issueSprint').value = parentIssue.sprint_id;
+    if (parentIssue.assignee_id) $('issueAssignee').value = parentIssue.assignee_id;
+  }
+  openModal('modal-issue');
+};
+
+window._hideSubtaskInput = function() {
+  $('subtaskAddBtn').style.display = '';
+  $('subtaskInputRow').style.display = 'none';
+  $('subtaskTitleInput').value = '';
+};
+
+window._submitSubtask = async function() {
+  var title = $('subtaskTitleInput').value.trim();
+  if (!title) return;
+  var parentId = S.drawerIssueId;
+  var parentIssue = S.data.issues.find(function(i){ return i.id === parentId; });
+  var spaceId = parentIssue ? parentIssue.space_id : S.currentSpace;
+  try {
+    await api('/api/issues', 'POST', {
+      space_id: spaceId,
+      parent_id: parentId,
+      sprint_id: parentIssue ? parentIssue.sprint_id : null,
+      title: title,
+      type: 'subtask',
+      priority: 'medium',
+      reporter_id: S.currentUser,
+      assignee_id: parentIssue ? parentIssue.assignee_id : null,
+      status: 'To Do'
+    });
+    toast('Subtask created');
+    $('subtaskTitleInput').value = '';
+    // Refresh drawer
+    var issue = await api('/api/issues/' + parentId);
+    renderDrawerSubtasks(issue.subtasks || []);
+    await refreshData();
+  } catch(e) { toast(e.message, 'error'); }
+};
+
+window._toggleSubtaskDone = async function(subtaskId, checked) {
+  var newStatus = checked ? 'Done' : 'To Do';
+  try {
+    await api('/api/issues/' + subtaskId, 'PUT', { status: newStatus });
+    var issue = await api('/api/issues/' + S.drawerIssueId);
+    renderDrawerSubtasks(issue.subtasks || []);
+    await refreshData();
+  } catch(e) { toast(e.message, 'error'); }
+};
+
+window._deleteSubtask = async function(subtaskId) {
+  var ok = await confirmDialog('Delete this subtask?');
+  if (!ok) return;
+  try {
+    await api('/api/issues/' + subtaskId, 'DELETE');
+    toast('Subtask deleted');
+    var issue = await api('/api/issues/' + S.drawerIssueId);
+    renderDrawerSubtasks(issue.subtasks || []);
+    await refreshData();
+  } catch(e) { toast(e.message, 'error'); }
+};
+
+// ═══════════════════════════════════════════════════════════
+// LINKED ITEMS (Jira-style)
+// ═══════════════════════════════════════════════════════════
+var LINK_TYPES = [
+  { value: 'blocks', label: 'blocks', inverse: 'is blocked by' },
+  { value: 'is_blocked_by', label: 'is blocked by', inverse: 'blocks' },
+  { value: 'clones', label: 'clones', inverse: 'is cloned by' },
+  { value: 'is_cloned_by', label: 'is cloned by', inverse: 'clones' },
+  { value: 'duplicates', label: 'duplicates', inverse: 'is duplicated by' },
+  { value: 'is_duplicated_by', label: 'is duplicated by', inverse: 'duplicates' },
+  { value: 'relates_to', label: 'relates to', inverse: 'relates to' },
+  { value: 'is_child_of', label: 'is child of', inverse: 'is parent of' },
+  { value: 'is_parent_of', label: 'is parent of', inverse: 'is child of' },
+];
+
+function linkTypeLabel(type) {
+  var found = LINK_TYPES.find(function(t){ return t.value === type; });
+  return found ? found.label : type.replace(/_/g, ' ');
+}
+
+function renderDrawerLinks(issue) {
+  var c = $('drawerLinks');
+  var links = issue.links || [];
+  var html = '';
+
+  if (links.length) {
+    // Group by link type
+    var grouped = {};
+    for (var li = 0; li < links.length; li++) {
+      var lnk = links[li];
+      var lt = lnk.link_type || 'relates_to';
+      // Determine if this issue is source or target to show correct direction
+      var isSource = lnk.source_id === issue.id;
+      var displayType = isSource ? linkTypeLabel(lt) : (LINK_TYPES.find(function(t){ return t.value === lt; }) || {}).inverse || linkTypeLabel(lt);
+      var targetId = isSource ? lnk.target_id : lnk.source_id;
+      var targetKey = lnk.target_key || targetId;
+      var targetTitle = lnk.target_title || '';
+      var targetStatus = lnk.target_status || '';
+      var targetType = lnk.target_type || 'task';
+      if (!grouped[displayType]) grouped[displayType] = [];
+      grouped[displayType].push({ id: targetId, key: targetKey, title: targetTitle, status: targetStatus, type: targetType, linkId: lnk.id });
+    }
+
+    for (var gtype in grouped) {
+      html += '<div class="link-group" style="margin-bottom:10px">' +
+        '<div style="font-size:11px;font-weight:600;color:var(--text2);text-transform:capitalize;margin-bottom:4px">' + esc(gtype) + '</div>';
+      var items = grouped[gtype];
+      for (var gi = 0; gi < items.length; gi++) {
+        var it = items[gi];
+        html += '<div class="link-item" style="display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:4px;border:1px solid var(--border);margin-bottom:4px;background:var(--bg3);cursor:pointer" ' +
+          'onmouseenter="this.style.borderColor=\'var(--accent)\'" onmouseleave="this.style.borderColor=\'var(--border)\'">' +
+          '<span style="font-size:12px">' + typeIcon(it.type) + '</span>' +
+          '<span style="font-size:11px;font-weight:700;color:var(--accent);cursor:pointer" onclick="openIssuePage(\'' + it.id + '\')">' + esc(it.key) + '</span>' +
+          '<span style="flex:1;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" onclick="openIssuePage(\'' + it.id + '\')">' + esc(it.title) + '</span>' +
+          statusBadge(it.status) +
+          '<button class="btn-icon" style="width:18px;height:18px;font-size:10px;opacity:0.4;flex-shrink:0" onclick="event.stopPropagation();window._removeLink(\'' + it.linkId + '\')" title="Remove link">\u2715</button>' +
+          '</div>';
+      }
+      html += '</div>';
+    }
+  } else {
+    html += '<p class="text-muted text-sm" style="margin-bottom:4px">No linked items</p>';
+  }
+
+  // Add link button
+  html += '<button class="btn btn-outline btn-sm" style="margin-top:6px;gap:4px" onclick="window._showLinkDialog()">\uD83D\uDD17 Link an issue</button>';
+
+  // Inline link dialog (hidden by default)
+  html += '<div id="linkDialogInline" style="display:none;margin-top:10px;padding:12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg2)">' +
+    '<div style="font-size:13px;font-weight:600;margin-bottom:8px">Link an issue</div>' +
+    '<div style="margin-bottom:8px">' +
+    '<label class="form-label">Link type</label>' +
+    '<select id="linkTypeSelect" class="input input-sm" style="width:100%">';
+  for (var lti = 0; lti < LINK_TYPES.length; lti++) {
+    html += '<option value="' + LINK_TYPES[lti].value + '">' + esc(LINK_TYPES[lti].label) + '</option>';
+  }
+  html += '</select></div>' +
+    '<div style="margin-bottom:8px">' +
+    '<label class="form-label">Search for an issue</label>' +
+    '<input type="text" id="linkSearchInput" class="input input-sm" placeholder="Search by issue key or title (e.g. BT-1)" oninput="window._searchLinkIssues(this.value)" style="width:100%">' +
+    '</div>' +
+    '<div id="linkSearchResults" style="max-height:160px;overflow-y:auto;margin-bottom:8px"></div>' +
+    '<div id="linkSelectedIssue" style="display:none;padding:6px 8px;border:1px solid var(--accent);border-radius:4px;background:var(--accent-bg);margin-bottom:8px;display:none;align-items:center;gap:6px"></div>' +
+    '<div style="display:flex;gap:6px;justify-content:flex-end">' +
+    '<button class="btn btn-outline btn-sm" onclick="window._hideLinkDialog()">Cancel</button>' +
+    '<button class="btn btn-primary btn-sm" id="linkSubmitBtn" disabled onclick="window._submitLink()">Link</button>' +
+    '</div></div>';
+
+  c.innerHTML = html;
+}
+
+window._showLinkDialog = function() {
+  var dlg = $('linkDialogInline');
+  if (dlg) {
+    dlg.style.display = '';
+    $('linkSearchInput').value = '';
+    var sel = $('linkSelectedIssue');
+    sel.style.display = 'none';
+    sel.dataset.issueId = '';
+    $('linkSubmitBtn').disabled = true;
+    // Show recent issues immediately on open
+    window._searchLinkIssues('');
+    setTimeout(function(){ $('linkSearchInput').focus(); }, 50);
+  }
+};
+
+window._hideLinkDialog = function() {
+  var dlg = $('linkDialogInline');
+  if (dlg) dlg.style.display = 'none';
+};
+
+window._searchLinkIssues = function(term) {
+  var results = $('linkSearchResults');
+  var currentIssueId = S.drawerIssueId;
+  // Get already-linked issue IDs to exclude them
+  var linkedIds = [];
+  var linkItems = document.querySelectorAll('#drawerLinks .link-item [onclick]');
+  // Show all when empty, otherwise filter by key/title
+  var matches = (S.data.issues || []).filter(function(i) {
+    if (i.id === currentIssueId) return false;
+    if (!term || term.trim().length === 0) return true; // show all when empty
+    var lower = term.toLowerCase().trim();
+    return (i.key && i.key.toLowerCase().indexOf(lower) >= 0) ||
+           (i.title && i.title.toLowerCase().indexOf(lower) >= 0);
+  }).slice(0, 10);
+
+  if (!matches.length) {
+    results.innerHTML = '<p class="text-muted text-xs" style="padding:6px 4px">No matching issues found</p>';
+    return;
+  }
+
+  var html = '';
+  for (var mi = 0; mi < matches.length; mi++) {
+    var m = matches[mi];
+    html += '<div class="link-search-item" style="display:flex;align-items:center;gap:8px;padding:6px 8px;cursor:pointer;border-radius:4px;font-size:12px" ' +
+      'onmouseenter="this.style.background=\'var(--bg4)\'" onmouseleave="this.style.background=\'\'" ' +
+      'onclick="window._selectLinkIssue(\'' + m.id + '\',\'' + esc(m.key) + '\',\'' + esc(m.title).replace(/'/g, "\\'") + '\')">' +
+      '<span style="font-size:11px">' + typeIcon(m.type) + '</span>' +
+      '<span style="font-weight:700;color:var(--accent);min-width:48px">' + esc(m.key) + '</span>' +
+      '<span style="flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(m.title) + '</span>' +
+      statusBadge(m.status) +
+      '</div>';
+  }
+  results.innerHTML = html;
+};
+
+window._selectLinkIssue = function(id, key, title) {
+  $('linkSearchResults').innerHTML = '';
+  $('linkSearchInput').value = '';
+  var sel = $('linkSelectedIssue');
+  sel.style.display = 'flex';
+  sel.dataset.issueId = id;
+  sel.innerHTML = '<span style="font-size:11px;font-weight:700;color:var(--accent)">' + esc(key) + '</span>' +
+    '<span style="flex:1;font-size:12px">' + esc(title) + '</span>' +
+    '<button class="btn-icon" style="width:18px;height:18px;font-size:10px" onclick="event.stopPropagation();window._clearLinkSelection()">\u2715</button>';
+  $('linkSubmitBtn').disabled = false;
+};
+
+window._clearLinkSelection = function() {
+  var sel = $('linkSelectedIssue');
+  sel.style.display = 'none';
+  sel.dataset.issueId = '';
+  sel.innerHTML = '';
+  $('linkSubmitBtn').disabled = true;
+};
+
+window._submitLink = async function() {
+  var targetId = $('linkSelectedIssue').dataset.issueId;
+  var linkType = $('linkTypeSelect').value;
+  if (!targetId) return;
+  try {
+    await api('/api/links', 'POST', {
+      source_id: S.drawerIssueId,
+      target_id: targetId,
+      link_type: linkType
+    });
+    toast('Issue linked');
+    window._hideLinkDialog();
+    // Refresh the drawer
+    var issue = await api('/api/issues/' + S.drawerIssueId);
+    renderDrawerLinks(issue);
+    await refreshData();
+  } catch(e) { toast(e.message || 'Failed to create link', 'error'); }
+};
+
+window._removeLink = async function(linkId) {
+  var ok = await confirmDialog('Remove this link?');
+  if (!ok) return;
+  try {
+    await api('/api/links/' + linkId, 'DELETE');
+    toast('Link removed');
+    var issue = await api('/api/issues/' + S.drawerIssueId);
+    renderDrawerLinks(issue);
+    await refreshData();
+  } catch(e) { toast(e.message, 'error'); }
+};
+
+// Store current issue data for tab switching
+var _drawerIssueData = null;
+
+function renderDrawerActivity(issue) {
+  // Support legacy call with just comments array
+  if (Array.isArray(issue)) issue = { comments: issue, history: [], worklogs: [] };
+  _drawerIssueData = issue;
+  var activeTab = (document.querySelector('.drawer-atab.active') || {}).dataset && document.querySelector('.drawer-atab.active').dataset.activityTab || 'all';
+  _renderActivityTab(activeTab, issue);
+}
+
+function _renderActivityTab(tab, issue) {
+  var c = $('drawerActivity');
+  issue = issue || _drawerIssueData || {};
+  var comments = issue.comments || [];
+  var history  = issue.history  || [];
+  var worklogs = issue.worklogs || [];
+
+  function commentHtml(cm) {
+    var user = findUser(cm.user_id);
+    var name = user ? user.name : (cm.user_name || 'Unknown');
+    var color = (user && user.color) || cm.user_color || '#6b7280';
+    return '<div class="drawer-comment-item" style="display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">' +
+      '<div class="drawer-comment-avatar-sm" style="background:' + color + ';width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff;flex-shrink:0">' + initials(name) + '</div>' +
+      '<div style="flex:1">' +
+      '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">' +
+      '<span style="font-weight:600;font-size:13px">' + esc(name) + '</span>' +
+      '<span style="font-size:11px;color:var(--text3)">' + fmtDateTime(cm.created_at) + '</span>' +
+      '<span style="font-size:10px;padding:1px 6px;border-radius:10px;background:var(--bg3);color:var(--text3)">Comment</span>' +
+      '</div>' +
+      '<div style="font-size:13px;line-height:1.5;white-space:pre-wrap">' + esc(cm.body) + '</div>' +
+      '</div></div>';
+  }
+
+  function historyHtml(h) {
+    var user = findUser(h.user_id);
+    var name = user ? user.name : (h.user_name || 'Unknown');
+    var color = (user && user.color) || h.user_color || '#6b7280';
+    var fieldLabel = { title:'Title', status:'Status', priority:'Priority', assignee_id:'Assignee', reporter_id:'Reporter', sprint_id:'Sprint', labels:'Labels', story_points:'Story Points', start_date:'Start Date', due_date:'Due Date', description:'Description' }[h.field_name] || h.field_name;
+    var oldVal = h.old_value || '—';
+    var newVal = h.new_value || '—';
+    return '<div style="display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">' +
+      '<div style="width:28px;height:28px;border-radius:50%;background:' + color + ';display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff;flex-shrink:0">' + initials(name) + '</div>' +
+      '<div style="flex:1">' +
+      '<div style="display:flex;align-items:center;gap:8px;margin-bottom:2px">' +
+      '<span style="font-weight:600;font-size:13px">' + esc(name) + '</span>' +
+      '<span style="font-size:11px;color:var(--text3)">' + fmtDateTime(h.created_at) + '</span>' +
+      '<span style="font-size:10px;padding:1px 6px;border-radius:10px;background:#dbeafe;color:#1e40af">Changed</span>' +
+      '</div>' +
+      '<div style="font-size:12px;color:var(--text2)">' +
+      'Updated <strong>' + esc(fieldLabel) + '</strong> from ' +
+      '<span style="text-decoration:line-through;color:var(--text3)">' + esc(oldVal) + '</span> → ' +
+      '<strong>' + esc(newVal) + '</strong>' +
+      '</div></div></div>';
+  }
+
+  function worklogHtml(w) {
+    var user = findUser(w.user_id);
+    var name = user ? user.name : (w.user_name || 'Unknown');
+    var color = (user && user.color) || w.user_color || '#6b7280';
+    var mins = w.time_spent || 0;
+    var timeStr = fmtMins(mins);
+    return '<div style="display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">' +
+      '<div style="width:28px;height:28px;border-radius:50%;background:' + color + ';display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff;flex-shrink:0">' + initials(name) + '</div>' +
+      '<div style="flex:1">' +
+      '<div style="display:flex;align-items:center;gap:8px;margin-bottom:2px">' +
+      '<span style="font-weight:600;font-size:13px">' + esc(name) + '</span>' +
+      '<span style="font-size:11px;color:var(--text3)">' + fmtDateTime(w.created_at || w.work_date) + '</span>' +
+      '<span style="font-size:10px;padding:1px 6px;border-radius:10px;background:#dcfce7;color:#166534">Work log</span>' +
+      '</div>' +
+      '<div style="font-size:12px;color:var(--text2)">' +
+      'Logged <strong>' + timeStr + '</strong>' + (w.description ? ' — ' + esc(w.description) : '') +
+      '</div>' +
+      '<div style="font-size:11px;color:var(--text3);margin-top:2px">Date: ' + fmtDate(w.work_date || w.created_at) + (w.is_billable ? ' · Billable' : '') + '</div>' +
+      '</div></div>';
+  }
+
+  // Comment box: show only on Comments + All tabs
+  var commentBox = document.querySelector('.drawer-comment-box');
+  if (commentBox) commentBox.style.display = (tab === 'comments' || tab === 'all') ? '' : 'none';
+
+  // Helper: merge items into sorted timeline
+  function buildTimeline(items) {
+    return items.sort(function(a, b) { return b.date - a.date; });
+  }
+
+  var html = '';
+  if (tab === 'comments') {
+    // Comments only + comment box (shown above)
+    if (!comments.length) { c.innerHTML = '<p class="text-muted text-sm" style="padding:12px 0">No comments yet.</p>'; return; }
+    comments.slice().sort(function(a,b){return new Date(b.created_at)-new Date(a.created_at);})
+      .forEach(function(cm){ html += commentHtml(cm); });
+
+  } else if (tab === 'history') {
+    // Full audit trail: field changes + comments + worklogs — all with date/time, no comment box
+    var all = [];
+    comments.forEach(function(x){ all.push({ type:'comment', date: new Date(x.created_at), data:x }); });
+    history.forEach(function(x){ all.push({ type:'history', date: new Date(x.created_at), data:x }); });
+    worklogs.forEach(function(x){ all.push({ type:'worklog', date: new Date(x.created_at||x.work_date), data:x }); });
+    buildTimeline(all);
+    if (!all.length) { c.innerHTML = '<p class="text-muted text-sm" style="padding:12px 0">No history yet.</p>'; return; }
+    all.forEach(function(item){
+      if (item.type==='comment') html += commentHtml(item.data);
+      else if (item.type==='history') html += historyHtml(item.data);
+      else html += worklogHtml(item.data);
+    });
+
+  } else if (tab === 'worklog') {
+    // Worklogs only, no comment box
+    if (!worklogs.length) { c.innerHTML = '<p class="text-muted text-sm" style="padding:12px 0">No time logged yet. Click "+ Log Time" to add.</p>'; return; }
+    worklogs.forEach(function(w){ html += worklogHtml(w); });
+
+  } else {
+    // ALL: everything merged, with comment box (shown above)
+    var all = [];
+    comments.forEach(function(x){ all.push({ type:'comment', date: new Date(x.created_at), data:x }); });
+    history.forEach(function(x){ all.push({ type:'history', date: new Date(x.created_at), data:x }); });
+    worklogs.forEach(function(x){ all.push({ type:'worklog', date: new Date(x.created_at||x.work_date), data:x }); });
+    buildTimeline(all);
+    if (!all.length) { c.innerHTML = '<p class="text-muted text-sm" style="padding:12px 0">No activity yet.</p>'; return; }
+    all.forEach(function(item){
+      if (item.type==='comment') html += commentHtml(item.data);
+      else if (item.type==='history') html += historyHtml(item.data);
+      else html += worklogHtml(item.data);
+    });
+  }
+  c.innerHTML = html || '<p class="text-muted text-sm" style="padding:12px 0">No activity yet.</p>';
+}
+
+function renderDrawerCustomFields(cfValues) {
+  var c = $('drawerCustomFields');
+  if (!cfValues || !cfValues.length) { c.innerHTML = ''; return; }
+  var html = '';
+  for (var i = 0; i < cfValues.length; i++) {
+    var cf = cfValues[i];
+    html += '<div class="drawer-field"><label class="drawer-label">' + esc(cf.field_name || cf.name || 'Custom') + '</label>' +
+      '<span class="drawer-value">' + esc(cf.value || '\u2014') + '</span></div>';
+  }
+  c.innerHTML = html;
+}
+
+// ═══════════════════════════════════════════════════════════
+// SPACE CRUD
+// ═══════════════════════════════════════════════════════════
+function canCreateSpace() {
+  var role = (S.currentUserObj || {}).role;
+  return role === 'admin' || role === 'owner';
+}
+
+function openSpaceModal(space) {
+  // Members can only edit, not create
+  if (!space && !canCreateSpace()) {
+    toast('Only admins can create spaces.', 'error');
+    return;
+  }
+  if (space && space.id) {
+    $('spaceId').value = space.id;
+    $('spaceName_input').value = space.name || '';
+    $('spaceKey_input').value = space.key || '';
+    $('spaceDesc').value = space.description || '';
+    $('spaceIconInput').value = space.icon || '';
+    $('spaceColor').value = space.color || '#2563eb';
+    $('spaceType').value = space.space_type || 'scrum';
+    $('spaceVisibility').value = space.visibility || 'private';
+    $('spaceModalTitle').textContent = 'Edit Space';
+  } else {
+    $('spaceId').value = '';
+    $('spaceName_input').value = '';
+    $('spaceKey_input').value = '';
+    $('spaceDesc').value = '';
+    $('spaceIconInput').value = '';
+    $('spaceColor').value = '#2563eb';
+    $('spaceType').value = 'scrum';
+    $('spaceVisibility').value = 'private';
+    $('spaceModalTitle').textContent = 'Create Space';
+  }
+  updateVisibilityHint($('spaceVisibility').value);
+  openModal('modal-space');
+}
+window.openSpaceModal = openSpaceModal;
+
+window.updateVisibilityHint = function(val) {
+  var el = $('visibilityHint');
+  if (!el) return;
+  var hints = {
+    private: '🔒 Only users you explicitly add as members can see this space.',
+    team: '👥 All members of your organization can view this space.',
+    org: '🌐 Visible across the entire organization, including viewers and guests.'
+  };
+  el.textContent = hints[val] || '';
+};
+
+async function handleSpaceSubmit(e) {
+  e.preventDefault();
+  var id = $('spaceId').value;
+  var spaceName = $('spaceName_input').value;
+  var payload = {
+    name: spaceName,
+    key: $('spaceKey_input').value.toUpperCase(),
+    description: $('spaceDesc').value,
+    icon: $('spaceIconInput').value,
+    color: $('spaceColor').value,
+    space_type: $('spaceType').value,
+    visibility: $('spaceVisibility').value,
+    owner_id: S.currentUser
+  };
+
+  try {
+    if (id) {
+      await api('/api/spaces/' + id, 'PUT', payload);
+      closeModal('modal-space');
+      await refreshData();
+      renderSidebar();
+      if (S.currentSpace) { var sp = getSpace(S.currentSpace); if (sp) renderSpaceHeader(sp); }
+      popupAlert('Space Updated', '"' + spaceName + '" has been updated successfully.', 'success');
+    } else {
+      var newSpace = await api('/api/spaces', 'POST', payload);
+      closeModal('modal-space');
+      await refreshData();
+      renderSidebar();
+      popupAlert('Space Created', '"' + spaceName + '" space has been created successfully.', 'success');
+      if (newSpace && newSpace.id) navigateToSpace(newSpace.id, 'summary');
+    }
+  } catch (err) {
+    popupAlert('Error', err.message || 'Could not save space. Please try again.', 'error');
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// SPRINT CRUD
+// ═══════════════════════════════════════════════════════════
+async function handleSprintSubmit(e) {
+  e.preventDefault();
+  var id = $('sprintIdInput').value;
+  var payload = {
+    space_id: $('sprintSpaceId').value || S.currentSpace,
+    name: $('sprintNameInput').value,
+    goal: $('sprintGoal').value,
+    start_date: $('sprintStartDate').value || null,
+    end_date: $('sprintEndDate').value || null
+  };
+
+  if (id) {
+    await api('/api/sprints/' + id, 'PUT', payload);
+    toast('Sprint updated');
+  } else {
+    await api('/api/sprints', 'POST', payload);
+    toast('Sprint created');
+  }
+  closeModal('modal-sprint');
+  await refreshData();
+  if (S.currentTab === 'backlog') renderBacklog();
+  else if (S.currentTab === 'sprint') renderSprintBoard();
+}
+
+// ═══════════════════════════════════════════════════════════
+// ISSUE CRUD
+// ═══════════════════════════════════════════════════════════
+function resetIssueForm() {
+  $('issueId').value = '';
+  $('issueSpaceId').value = S.currentSpace || '';
+  $('issueParentId').value = '';
+  $('issueTitleInput').value = '';
+  $('issueType').value = 'task';
+  $('issuePriority').value = 'medium';
+  $('issuePoints').value = '';
+  $('issueLabels').value = '';
+  $('issueStartDate').value = '';
+  $('issueDueDate').value = '';
+  $('issueDescription').value = '';
+}
+
+function populateIssueFormSelects() {
+  var spaceId = $('issueSpaceId').value || S.currentSpace;
+  var members = spaceId ? getSpaceMembers(spaceId) : (S.data.users || []);
+  if (!members.length) members = S.data.users || [];
+  var sprints = spaceId ? getSpaceSprints(spaceId) : [];
+
+  populateUserSelect($('issueAssignee'), members, null);
+  populateUserSelect($('issueReporter'), members, S.currentUser);
+  populateSprintSelect($('issueSprint'), sprints, null);
+}
+
+async function handleIssueSubmit(e) {
+  e.preventDefault();
+  var id = $('issueId').value;
+  var parentId = $('issueParentId').value || null;
+  var payload = {
+    space_id: $('issueSpaceId').value || S.currentSpace,
+    title: $('issueTitleInput').value,
+    type: $('issueType').value,
+    priority: $('issuePriority').value,
+    assignee_id: $('issueAssignee').value || null,
+    reporter_id: $('issueReporter').value || null,
+    sprint_id: $('issueSprint').value || null,
+    story_points: $('issuePoints').value ? parseInt($('issuePoints').value, 10) : null,
+    labels: $('issueLabels').value,
+    start_date: $('issueStartDate').value || null,
+    due_date: $('issueDueDate').value || null,
+    description: $('issueDescription').value,
+    original_estimate: parseEstimate($('issueEstimate').value),
+    status: 'To Do'
+  };
+  if (parentId) payload.parent_id = parentId;
+
+  if (id) {
+    delete payload.status;
+    await api('/api/issues/' + id, 'PUT', payload);
+    toast('Issue updated');
+    closeModal('modal-issue');
+    await refreshData();
+    renderCurrentView();
+  } else {
+    var created = await api('/api/issues', 'POST', payload);
+    closeModal('modal-issue');
+    await refreshData();
+    // If it's a subtask, refresh the parent drawer and open subtask in new tab
+    if (parentId && S.drawerIssueId === parentId) {
+      var parentIssue = await api('/api/issues/' + parentId);
+      renderDrawerSubtasks(parentIssue.subtasks || []);
+    } else {
+      renderCurrentView();
+    }
+    if (created && created.id) {
+      toast('Issue created — opening in new tab…');
+      setTimeout(function() { openIssuePage(created.id); }, 300);
+    } else {
+      toast('Issue created');
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// FILTER CRUD
+// ═══════════════════════════════════════════════════════════
+async function handleFilterSubmit(e) {
+  e.preventDefault();
+  var id = $('filterId').value;
+  var condRows = qsa('.filter-condition-row');
+  var conditions = [];
+  condRows.forEach(function (row) {
+    conditions.push({
+      field: row.querySelector('.fc-field').value,
+      operator: row.querySelector('.fc-op').value,
+      value: row.querySelector('.fc-value').value
+    });
+  });
+
+  var payload = {
+    space_id: $('filterSpaceId').value || S.currentSpace,
+    user_id: S.currentUser,
+    name: $('filterNameInput').value,
+    conditions: JSON.stringify(conditions),
+    is_shared: $('filterShared').checked,
+    is_pinned: $('filterPinned').checked
+  };
+
+  if (id) {
+    await api('/api/filters/' + id, 'PUT', payload);
+    toast('Filter updated');
+  } else {
+    await api('/api/filters', 'POST', payload);
+    toast('Filter created');
+  }
+  closeModal('modal-filter');
+  await refreshData();
+  renderFilters();
+}
+
+// ═══════════════════════════════════════════════════════════
+// WORKLOG MODAL
+// ═══════════════════════════════════════════════════════════
+async function handleWorklogSubmit(e) {
+  e.preventDefault();
+  var hours = parseInt($('worklogHours').value, 10) || 0;
+  var minutes = parseInt($('worklogMinutes').value, 10) || 0;
+  var timeSpent = hours * 60 + minutes;
+  if (timeSpent <= 0) { toast('Please enter time spent', 'error'); return; }
+
+  var payload = {
+    issue_id: $('worklogIssueId').value,
+    user_id: S.currentUser,
+    time_spent: timeSpent,
+    work_date: $('worklogDate').value,
+    description: $('worklogDesc').value,
+    is_billable: $('worklogBillable').checked
+  };
+
+  await api('/api/worklogs', 'POST', payload);
+  closeModal('modal-worklog');
+  toast('Time logged successfully');
+
+  if (S.drawerIssueId) {
+    // Re-fetch fresh issue data (includes new worklog) then switch to Work log tab
+    try {
+      var fresh = await api('/api/issues/' + S.drawerIssueId);
+      if (fresh) {
+        _drawerIssueData = fresh;
+        // Update time spent display
+        var totalSpent = (fresh.worklogs || []).reduce(function(s,w){ return s+(w.time_spent||0); }, 0);
+        if ($('drawerTimeSpent')) $('drawerTimeSpent').textContent = fmtMins(totalSpent);
+        // Switch to Work log tab
+        var wlTab = document.querySelector('[data-activity-tab="worklog"]');
+        if (wlTab) {
+          document.querySelectorAll('[data-activity-tab]').forEach(function(t){
+            t.classList.toggle('active', t === wlTab);
+          });
+          var actBody = $('activitySectionBody');
+          if (actBody) actBody.dataset.activeTab = 'worklog';
+          _renderActivityTab('worklog', fresh);
+        }
+      }
+    } catch(e) {}
+    refreshData();
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// NOTIFICATIONS
+// ═══════════════════════════════════════════════════════════
+async function loadNotifications() {
+  if (!S.currentUser) return;
+  try {
+    var notifs = await api('/api/notifications?user_id=' + S.currentUser);
+    S.data.notifications = Array.isArray(notifs) ? notifs : [];
+    renderNotifBadge();
+  } catch (e) {
+    // Notifications are non-critical
+  }
+}
+
+function renderNotifBadge() {
+  var notifs = S.data.notifications || [];
+  var unread = 0;
+  for (var i = 0; i < notifs.length; i++) {
+    if (!notifs[i].is_read) unread++;
+  }
+  var badge = $('notifBadge');
+  if (unread > 0) {
+    badge.textContent = unread > 99 ? '99+' : String(unread);
+    badge.removeAttribute('hidden');
+  } else {
+    badge.setAttribute('hidden', '');
+  }
+}
+
+function renderNotifPanel() {
+  var notifs = S.data.notifications || [];
+  if (!notifs.length) {
+    $('notifList').innerHTML = '<p class="text-muted" style="padding:1rem">No notifications</p>';
+    return;
+  }
+  var sorted = notifs.slice().sort(function (a, b) { return new Date(b.created_at) - new Date(a.created_at); });
+  var html = '';
+  var limit = Math.min(sorted.length, 20);
+  for (var i = 0; i < limit; i++) {
+    var n = sorted[i];
+    html += '<div class="notif-item' + (n.is_read ? '' : ' notif-unread') + '" onclick="window._markNotifRead(\'' + n.id + '\')">' +
+      '<div class="notif-text">' + esc(n.message || n.title || 'Notification') + '</div>' +
+      '<div class="text-muted">' + relativeTime(n.created_at) + '</div></div>';
+  }
+  $('notifList').innerHTML = html;
+}
+
+window._markNotifRead = async function (id) {
+  await api('/api/notifications/' + id + '/read', 'PUT');
+  await loadNotifications();
+  renderNotifPanel();
+};
+
+async function markAllRead() {
+  await api('/api/notifications/read-all', 'PUT', { user_id: S.currentUser });
+  await loadNotifications();
+  renderNotifPanel();
+}
+
+// ═══════════════════════════════════════════════════════════
+// EVENT BINDINGS
+// ═══════════════════════════════════════════════════════════
+document.addEventListener('DOMContentLoaded', function () {
+  initTheme();
+  init();
+
+  // Sidebar global nav
+  qsa('.nav-item[data-view]').forEach(function (el) {
+    el.addEventListener('click', function (e) {
+      e.preventDefault();
+      navigateTo(el.dataset.view);
+    });
+  });
+
+  // Sidebar space tabs
+  qsa('.nav-item[data-tab]').forEach(function (el) {
+    el.addEventListener('click', function (e) {
+      e.preventDefault();
+      if (!S.currentSpace) return;
+      renderTab(el.dataset.tab);
+    });
+  });
+
+  // Sidebar toggle
+  $('sidebarToggle').addEventListener('click', function () {
+    $('sidebar').classList.toggle('sidebar-collapsed');
+  });
+
+  // Sidebar search
+  $('sidebarSearch').addEventListener('input', function () {
+    var term = $('sidebarSearch').value.toLowerCase();
+    qsa('.space-item').forEach(function (el) {
+      el.style.display = el.textContent.toLowerCase().indexOf(term) >= 0 ? '' : 'none';
+    });
+  });
+
+  // New space
+  $('newSpaceBtn').addEventListener('click', function () { openSpaceModal(); });
+
+  // Global create (button removed from sidebar — keep guard in case it's re-added)
+  var _gcb = $('globalCreateBtn');
+  if (_gcb) _gcb.addEventListener('click', function () {
+    if (S.currentSpace) {
+      resetIssueForm();
+      $('issueSpaceId').value = S.currentSpace;
+      $('issueModalTitle').textContent = 'Create Issue';
+      populateIssueFormSelects();
+      openModal('modal-issue');
+    } else {
+      openSpaceModal();
+    }
+  });
+
+  // Top bar create issue
+  $('createIssueBtn').addEventListener('click', function () {
+    if (S.currentSpace) {
+      resetIssueForm();
+      $('issueSpaceId').value = S.currentSpace;
+      $('issueModalTitle').textContent = 'Create Issue';
+      populateIssueFormSelects();
+      openModal('modal-issue');
+    } else {
+      toast('Select a space first', 'error');
+    }
+  });
+
+  // Create sprint
+  $('createSprintBtn').addEventListener('click', function () { window._openSprintModal(null); });
+
+  // Invite member (header button navigates to settings > people)
+  $('inviteMemberBtn').addEventListener('click', function () {
+    if (S.currentSpace) {
+      _settingsActiveTab = 'people';
+      navigateToSpace(S.currentSpace, 'space-settings');
+    } else {
+      toast('Select a space first', 'error');
+    }
+  });
+
+  // Notifications
+  $('notifBtn').addEventListener('click', function () {
+    var panel = $('notifPanel');
+    if (panel.hasAttribute('hidden')) {
+      panel.removeAttribute('hidden');
+      renderNotifPanel();
+    } else {
+      panel.setAttribute('hidden', '');
+    }
+  });
+  $('markAllReadBtn').addEventListener('click', function () { markAllRead(); });
+
+  // Close notif panel on outside click
+  document.addEventListener('click', function (e) {
+    var panel = $('notifPanel');
+    if (!panel.hasAttribute('hidden') &&
+        !panel.contains(e.target) &&
+        e.target !== $('notifBtn') &&
+        !$('notifBtn').contains(e.target)) {
+      panel.setAttribute('hidden', '');
+    }
+  });
+
+  // Form submits
+  $('spaceForm').addEventListener('submit', handleSpaceSubmit);
+  $('sprintForm').addEventListener('submit', handleSprintSubmit);
+  $('issueForm').addEventListener('submit', handleIssueSubmit);
+  $('filterForm').addEventListener('submit', handleFilterSubmit);
+  $('worklogForm').addEventListener('submit', handleWorklogSubmit);
+
+  // Create filter
+  $('createFilterBtn').addEventListener('click', function () {
+    $('filterId').value = '';
+    $('filterSpaceId').value = S.currentSpace || '';
+    $('filterNameInput').value = '';
+    $('filterShared').checked = false;
+    $('filterPinned').checked = false;
+    $('filterConditions').innerHTML = '';
+    $('filterModalTitle').textContent = 'Create Filter';
+    openModal('modal-filter');
+  });
+
+  // Add filter condition
+  $('addConditionBtn').addEventListener('click', function () {
+    var row = document.createElement('div');
+    row.className = 'filter-condition-row';
+    row.innerHTML = '<select class="input input-sm fc-field">' +
+      '<option value="status">Status</option><option value="priority">Priority</option>' +
+      '<option value="type">Type</option><option value="assignee_id">Assignee</option>' +
+      '<option value="labels">Labels</option></select>' +
+      '<select class="input input-sm fc-op">' +
+      '<option value="equals">equals</option><option value="not_equals">not equals</option>' +
+      '<option value="contains">contains</option></select>' +
+      '<input type="text" class="input input-sm fc-value" value="">' +
+      '<button type="button" class="btn btn-sm btn-outline" onclick="this.closest(\'.filter-condition-row\').remove()">x</button>';
+    $('filterConditions').appendChild(row);
+  });
+
+  // Backlog search
+  $('backlogSearch').addEventListener('input', function () {
+    if (S.currentTab === 'backlog') renderBacklog();
+  });
+
+  // All work search
+  $('allWorkSearch').addEventListener('input', function () {
+    if (S.currentTab === 'allwork') renderAllWork();
+  });
+
+  // Space search
+  $('spaceSearch').addEventListener('input', function () {
+    var term = $('spaceSearch').value;
+    if (S.currentTab === 'backlog') {
+      $('backlogSearch').value = term;
+      renderBacklog();
+    } else if (S.currentTab === 'allwork') {
+      $('allWorkSearch').value = term;
+      renderAllWork();
+    }
+  });
+
+  // Report selector
+  $('reportSelector').addEventListener('change', function () {
+    if (S.currentTab === 'reports') renderReportContent($('reportSelector').value);
+  });
+
+  // Activity tab switching (All / Comments / History / Work log)
+  document.addEventListener('click', async function(e) {
+    var btn = e.target.closest('[data-activity-tab]');
+    if (!btn) return;
+    document.querySelectorAll('[data-activity-tab]').forEach(function(t){
+      t.classList.toggle('active', t === btn);
+    });
+    var tab = btn.dataset.activityTab;
+    // Drive CSS-based comment box visibility via data attribute
+    var body = $('activitySectionBody');
+    if (body) body.dataset.activeTab = tab;
+    // Always re-fetch fresh issue data so worklogs + history are current
+    if (S.drawerIssueId) {
+      try {
+        var fresh = await api('/api/issues/' + S.drawerIssueId);
+        if (fresh) { _drawerIssueData = fresh; }
+      } catch(_) {}
+    }
+    _renderActivityTab(tab);
+  });
+
+  // Keyboard: Escape closes drawer then modals
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') {
+      if (S.drawerIssueId) { closeDrawer(); return; }
+      qsa('.modal:not([hidden])').forEach(function (m) { closeModal(m.id); });
+    }
+  });
+
+  // Drawer activity tab switching
+  document.addEventListener('click', function (e) {
+    if (e.target.matches('[data-activity-tab]')) {
+      var tab = e.target.dataset.activityTab;
+      qsa('[data-activity-tab]').forEach(function (t) {
+        t.classList.toggle('active', t.dataset.activityTab === tab);
+      });
+    }
+  });
+
+  // Sidebar section collapse toggles
+  qsa('.sidebar-collapse-toggle').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var content = btn.closest('.sidebar-section').querySelector('.sidebar-section-content');
+      if (content) {
+        content.classList.toggle('collapsed');
+        btn.textContent = content.classList.contains('collapsed') ? '\u25B8' : '\u25BE';
+      }
+    });
+  });
+});
+
+// ═══════════════════════════════════════════════════════════
+// USER MANAGEMENT VIEW
+// ═══════════════════════════════════════════════════════════
+async function renderUserManagement() {
+  var view = $('view-user-management');
+  if (!view) return;
+  var me = S.currentUserObj || {};
+  var isAdmin = me.role === 'admin' || me.role === 'owner';
+  if (!isAdmin) {
+    view.innerHTML = '<div class="view-empty"><h2>Access Denied</h2><p>Only admins can manage users.</p></div>';
+    return;
+  }
+
+  view.innerHTML = '<div class="settings-loading">Loading users...</div>';
+
+  var users = [];
+  try { users = await api('/api/users'); } catch (e) { return; }
+
+  var rows = users.map(function (u) {
+    var statusBadge = u.is_active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-muted">Inactive</span>';
+    var lastLogin = u.last_login ? relativeTime(u.last_login) : 'Never';
+    return '<tr>' +
+      '<td><div style="display:flex;align-items:center;gap:10px">' +
+      '<div class="user-avatar-sm" style="background:' + (u.color || '#6366f1') + '">' + initials(u.name) + '</div>' +
+      '<div><div style="font-weight:600">' + esc(u.name) + '</div><div style="font-size:12px;color:var(--muted)">' + esc(u.email) + '</div></div>' +
+      '</div></td>' +
+      '<td><select class="input input-sm um-role-sel" data-uid="' + u.id + '" ' + (u.id === me.id ? 'disabled' : '') + '>' +
+      ['owner','admin','member'].map(function(r){ return '<option value="'+r+'"'+(u.role===r?' selected':'')+'>'+cap(r)+'</option>'; }).join('') +
+      '</select></td>' +
+      '<td>' + statusBadge + '</td>' +
+      '<td>' + lastLogin + '</td>' +
+      '<td>' +
+      (u.id !== me.id ? '<button class="btn btn-sm btn-outline um-toggle-btn" data-uid="' + u.id + '" data-active="' + u.is_active + '">' + (u.is_active ? 'Deactivate' : 'Activate') + '</button> ' : '') +
+      '<button class="btn btn-sm btn-outline um-pwd-btn" data-uid="' + u.id + '" data-uname="' + esc(u.name) + '">Reset PW</button>' +
+      '</td>' +
+      '</tr>';
+  }).join('');
+
+  view.innerHTML =
+    '<div class="view-content" style="padding:24px 32px">' +
+    '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px">' +
+    '<div><h2 style="margin:0;font-size:22px;font-weight:700">User Management</h2>' +
+    '<p style="margin:4px 0 0;color:var(--muted)">' + users.length + ' users in your organization</p></div>' +
+    '<button class="btn btn-primary" onclick="openInviteUserModal()">+ Invite User</button>' +
+    '</div>' +
+    '<div class="table-container"><table class="data-table"><thead><tr>' +
+    '<th>User</th><th>Role</th><th>Status</th><th>Last Login</th><th>Actions</th>' +
+    '</tr></thead><tbody>' + rows + '</tbody></table></div>' +
+    '</div>';
+
+  // Role change handlers
+  qsa('.um-role-sel').forEach(function (sel) {
+    sel.addEventListener('change', async function () {
+      var uid = sel.dataset.uid;
+      try {
+        await api('/api/users/' + uid, 'PUT', { role: sel.value });
+        toast('Role updated');
+      } catch (e) { /* shown by api */ }
+    });
+  });
+
+  // Activate/deactivate handlers
+  qsa('.um-toggle-btn').forEach(function (btn) {
+    btn.addEventListener('click', async function () {
+      var uid = btn.dataset.uid;
+      var isActive = btn.dataset.active === 'true';
+      var ok = await confirmDialog((isActive ? 'Deactivate' : 'Activate') + ' this user?');
+      if (!ok) return;
+      try {
+        await api('/api/users/' + uid, 'PUT', { is_active: !isActive });
+        toast('User ' + (isActive ? 'deactivated' : 'activated'));
+        renderUserManagement();
+      } catch (e) {}
+    });
+  });
+
+  // Reset password handlers
+  qsa('.um-pwd-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      openResetPasswordModal(btn.dataset.uid, btn.dataset.uname);
+    });
+  });
+}
+
+function openInviteUserModal() {
+  var modal = $('modal-invite-user');
+  if (!modal) return;
+  $('inviteUserEmail').value = '';
+  $('inviteUserRole').value = 'member';
+  $('inviteLinkResult').setAttribute('hidden', '');
+  $('inviteUserSubmitBtn').removeAttribute('hidden');
+  openModal('modal-invite-user');
+}
+window.openInviteUserModal = openInviteUserModal;
+
+function openResetPasswordModal(userId, userName) {
+  $('resetPwUserId').value = userId;
+  $('resetPwUserName').textContent = userName;
+  $('resetPwNew').value = '';
+  $('resetPwConfirm').value = '';
+  openModal('modal-reset-pw');
+}
+
+// Invite user form submit
+document.addEventListener('DOMContentLoaded', function () {
+  var invForm = $('inviteUserForm');
+  if (invForm) {
+    invForm.addEventListener('submit', async function (e) {
+      e.preventDefault();
+      var email = $('inviteUserEmail').value.trim();
+      var role = $('inviteUserRole').value;
+      try {
+        var r = await api('/api/auth/invite', 'POST', { email: email, role: role });
+        $('inviteUserSubmitBtn').setAttribute('hidden', '');
+        $('inviteLinkResult').removeAttribute('hidden');
+        $('inviteLinkUrl').value = r.invite_url;
+        popupAlert('Invite Created!', 'Share the invite link with the user. It expires in 7 days.', 'success');
+      } catch (e) {}
+    });
+  }
+
+  var resetForm = $('resetPwForm');
+  if (resetForm) {
+    resetForm.addEventListener('submit', async function (e) {
+      e.preventDefault();
+      var uid = $('resetPwUserId').value;
+      var np = $('resetPwNew').value;
+      var cp = $('resetPwConfirm').value;
+      if (np !== cp) { toast('Passwords do not match', 'error'); return; }
+      if (np.length < 6) { toast('Password must be at least 6 characters', 'error'); return; }
+      try {
+        await api('/api/users/' + uid + '/change-password', 'PUT', { new_password: np });
+        closeModal('modal-reset-pw');
+        popupAlert('Password Reset', 'Password has been updated successfully.', 'success');
+      } catch (e) {}
+    });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════
+// ADMIN SETTINGS
+// ═══════════════════════════════════════════════════════════
+var _adminSection = 'org-general';
+
+async function renderAdminSettings(section) {
+  _adminSection = section || _adminSection;
+  var view = $('view-settings');
+  if (!view) return;
+  var me = S.currentUserObj || {};
+  var isAdmin = me.role === 'admin' || me.role === 'owner';
+  if (!isAdmin) {
+    view.innerHTML = '<div style="padding:40px;text-align:center"><h2>Access Denied</h2><p style="color:var(--muted)">Only admins can access settings.</p></div>';
+    return;
+  }
+
+  // Update active nav
+  qsa('.admin-nav-item').forEach(function(a) {
+    a.classList.toggle('active', a.dataset.section === _adminSection);
+  });
+
+  var content = $('adminSettingsContent');
+  if (!content) return;
+  content.innerHTML = '<div style="padding:20px;color:var(--text3)">Loading...</div>';
+
+  switch (_adminSection) {
+    case 'org-general':    await renderAdminOrgGeneral(content); break;
+    case 'org-security':   renderAdminSecurity(content); break;
+    case 'org-notifications': renderAdminNotifications(content); break;
+    case 'user-management': await renderAdminUsers(content); break;
+    case 'roles-permissions': renderAdminRoles(content); break;
+    case 'all-spaces':     await renderAdminSpaces(content); break;
+    case 'global-custom-fields': await renderAdminCustomFields(content); break;
+    case 'email-settings': await renderAdminEmailSettings(content); break;
+    case 'audit-log':      await renderAdminAuditLog(content); break;
+    default: content.innerHTML = '';
+  }
+}
+window.renderAdminSettings = renderAdminSettings;
+
+// Wire up nav clicks after DOM ready
+document.addEventListener('click', function(e) {
+  var item = e.target.closest('.admin-nav-item');
+  if (!item || !item.dataset.section) return;
+  renderAdminSettings(item.dataset.section);
+});
+
+// ── Org General ──────────────────────────────────────────
+async function renderAdminOrgGeneral(el) {
+  // Fetch fresh org data from DB
+  var org = {};
+  try { org = await api('/api/org') || {}; if (S.data) S.data.org = org; } catch(e) {}
+  var users = (S.data && S.data.users) || [];
+  var spaces = ((S.data && S.data.spaces) || []).filter(function(s){ return !s.is_archived; });
+  var issues = (S.data && S.data.issues) || [];
+  var activeUsers = users.filter(function(u){ return u.is_active !== false; }).length;
+
+  el.innerHTML =
+    '<div class="admin-section-header">' +
+    '<h2>🏢 Organization Settings</h2>' +
+    '<p>Manage your organization profile and workspace configuration.</p>' +
+    '</div>' +
+
+    '<div class="admin-stat-grid">' +
+    '<div class="admin-stat-card"><div class="admin-stat-num">' + users.length + '</div><div class="admin-stat-label">Total Users</div></div>' +
+    '<div class="admin-stat-card"><div class="admin-stat-num">' + activeUsers + '</div><div class="admin-stat-label">Active Users</div></div>' +
+    '<div class="admin-stat-card"><div class="admin-stat-num">' + spaces.length + '</div><div class="admin-stat-label">Active Spaces</div></div>' +
+    '<div class="admin-stat-card"><div class="admin-stat-num">' + issues.length + '</div><div class="admin-stat-label">Total Issues</div></div>' +
+    '</div>' +
+
+    '<div class="admin-card">' +
+    '<h3>Organization Profile</h3>' +
+    '<form id="orgEditForm">' +
+    '<div class="admin-field-row">' +
+    '<div><div class="admin-field-label">Organization Name</div><div class="admin-field-desc">Displayed across the workspace</div></div>' +
+    '<input id="orgNameInput" class="input input-sm" style="width:220px" value="' + esc(org.name || '') + '">' +
+    '</div>' +
+    '<div class="admin-field-row">' +
+    '<div><div class="admin-field-label">Slug</div><div class="admin-field-desc">URL identifier for the workspace</div></div>' +
+    '<input id="orgSlugInput" class="input input-sm" style="width:220px" value="' + esc(org.slug || '') + '">' +
+    '</div>' +
+    '<div class="admin-field-row">' +
+    '<div><div class="admin-field-label">Plan</div><div class="admin-field-desc">Current subscription tier</div></div>' +
+    '<span class="badge" style="background:rgba(77,144,224,0.15);color:var(--accent);padding:5px 12px">Enterprise</span>' +
+    '</div>' +
+    '<div style="margin-top:16px">' +
+    '<button type="submit" class="btn btn-primary btn-sm">Save Changes</button>' +
+    '</div>' +
+    '</form>' +
+    '</div>' +
+
+    '<div class="admin-card">' +
+    '<h3>Database Connection <span class="badge badge-success" style="margin-left:8px;font-size:11px">🟢 Live</span></h3>' +
+    '<div class="admin-field-row"><div class="admin-field-label">Host</div><code style="font-size:12px;background:var(--bg3);padding:3px 8px;border-radius:4px">localhost:5432</code></div>' +
+    '<div class="admin-field-row"><div class="admin-field-label">Database</div><code style="font-size:12px;background:var(--bg3);padding:3px 8px;border-radius:4px">sprintboard</code></div>' +
+    '<div class="admin-field-row"><div class="admin-field-label">User</div><code style="font-size:12px;background:var(--bg3);padding:3px 8px;border-radius:4px">postgres</code></div>' +
+    '<div class="admin-field-row"><div class="admin-field-label">Status</div><span class="badge badge-success">🟢 Active — All data persisted</span></div>' +
+    '<div class="admin-field-row"><div class="admin-field-label">Tables</div><span style="font-size:13px;color:var(--text)">18 tables · scrypt password hashing · session-based auth</span></div>' +
+    '</div>';
+
+  // Save org settings to DB
+  var form = $('orgEditForm');
+  if (form) {
+    form.addEventListener('submit', async function(e) {
+      e.preventDefault();
+      var name = $('orgNameInput').value.trim();
+      var slug = $('orgSlugInput').value.trim();
+      if (!name) { toast('Organization name is required', 'error'); return; }
+      try {
+        var updated = await api('/api/org', 'PUT', { name: name, slug: slug });
+        if (S.data) S.data.org = updated;
+        popupAlert('Settings Saved', 'Organization profile updated successfully.', 'success');
+      } catch(e) {}
+    });
+  }
+}
+
+// ── Security ─────────────────────────────────────────────
+function renderAdminSecurity(el) {
+  el.innerHTML =
+    '<div class="admin-section-header">' +
+    '<h2>🔒 Security</h2>' +
+    '<p>Manage authentication, sessions, and access control settings.</p>' +
+    '</div>' +
+
+    '<div class="admin-card">' +
+    '<h3>Authentication</h3>' +
+    '<div class="admin-field-row">' +
+    '<div><div class="admin-field-label">Password Hashing</div><div class="admin-field-desc">Algorithm used for password storage</div></div>' +
+    '<code style="font-size:12px;background:var(--bg3);padding:3px 8px;border-radius:4px">scrypt (Node.js built-in)</code>' +
+    '</div>' +
+    '<div class="admin-field-row">' +
+    '<div><div class="admin-field-label">Session Duration</div><div class="admin-field-desc">How long login sessions remain valid</div></div>' +
+    '<span style="font-size:13px;color:var(--text)">7 days</span>' +
+    '</div>' +
+    '<div class="admin-field-row">' +
+    '<div><div class="admin-field-label">Session Tokens</div><div class="admin-field-desc">Random 256-bit tokens stored in database</div></div>' +
+    '<span class="badge badge-success">Enabled</span>' +
+    '</div>' +
+    '</div>' +
+
+    '<div class="admin-card">' +
+    '<h3>Password Policy</h3>' +
+    '<div class="admin-field-row">' +
+    '<div><div class="admin-field-label">Minimum Length</div><div class="admin-field-desc">Minimum number of characters required</div></div>' +
+    '<span style="font-size:13px;color:var(--text)">6 characters</span>' +
+    '</div>' +
+    '<div class="admin-field-row">' +
+    '<div><div class="admin-field-label">Require Mixed Case</div></div>' +
+    '<label class="toggle-switch"><input type="checkbox" checked disabled><span class="toggle-slider"></span></label>' +
+    '</div>' +
+    '<div class="admin-field-row">' +
+    '<div><div class="admin-field-label">Require Special Characters</div></div>' +
+    '<label class="toggle-switch"><input type="checkbox" checked disabled><span class="toggle-slider"></span></label>' +
+    '</div>' +
+    '</div>' +
+
+    '<div class="admin-card">' +
+    '<h3>Access Control</h3>' +
+    '<div class="admin-field-row">' +
+    '<div><div class="admin-field-label">Invite-Only Registration</div><div class="admin-field-desc">New users can only join via admin invite</div></div>' +
+    '<label class="toggle-switch"><input type="checkbox" checked disabled><span class="toggle-slider"></span></label>' +
+    '</div>' +
+    '<div class="admin-field-row">' +
+    '<div><div class="admin-field-label">Admin User Creation</div><div class="admin-field-desc">Only admins and owners can create users</div></div>' +
+    '<label class="toggle-switch"><input type="checkbox" checked disabled><span class="toggle-slider"></span></label>' +
+    '</div>' +
+    '</div>';
+}
+
+// ── Notifications ────────────────────────────────────────
+function renderAdminNotifications(el) {
+  el.innerHTML =
+    '<div class="admin-section-header">' +
+    '<h2>🔔 Notifications</h2>' +
+    '<p>Configure workspace-wide notification preferences.</p>' +
+    '</div>' +
+
+    '<div class="admin-card">' +
+    '<h3>In-App Notifications</h3>' +
+    '<div class="admin-field-row">' +
+    '<div><div class="admin-field-label">Issue Assigned</div><div class="admin-field-desc">Notify when an issue is assigned to a user</div></div>' +
+    '<label class="toggle-switch"><input type="checkbox" checked><span class="toggle-slider"></span></label>' +
+    '</div>' +
+    '<div class="admin-field-row">' +
+    '<div><div class="admin-field-label">Issue Status Changed</div><div class="admin-field-desc">Notify when issue status is updated</div></div>' +
+    '<label class="toggle-switch"><input type="checkbox" checked><span class="toggle-slider"></span></label>' +
+    '</div>' +
+    '<div class="admin-field-row">' +
+    '<div><div class="admin-field-label">Comment Added</div><div class="admin-field-desc">Notify on new comments</div></div>' +
+    '<label class="toggle-switch"><input type="checkbox" checked><span class="toggle-slider"></span></label>' +
+    '</div>' +
+    '<div class="admin-field-row">' +
+    '<div><div class="admin-field-label">Sprint Started / Completed</div><div class="admin-field-desc">Notify on sprint lifecycle events</div></div>' +
+    '<label class="toggle-switch"><input type="checkbox" checked><span class="toggle-slider"></span></label>' +
+    '</div>' +
+    '</div>' +
+
+    '<div class="admin-card">' +
+    '<h3>Email Notifications</h3>' +
+    '<div class="admin-field-row">' +
+    '<div><div class="admin-field-label">SMTP Server</div><div class="admin-field-desc">Email service not yet configured</div></div>' +
+    '<span class="badge badge-muted">Not configured</span>' +
+    '</div>' +
+    '<div class="admin-field-row">' +
+    '<div><div class="admin-field-label">Invite Emails</div><div class="admin-field-desc">Send invite links via email (requires SMTP)</div></div>' +
+    '<label class="toggle-switch"><input type="checkbox" disabled><span class="toggle-slider"></span></label>' +
+    '</div>' +
+    '</div>';
+}
+
+// ── Users (Admin) ─────────────────────────────────────────
+async function renderAdminUsers(el) {
+  el.innerHTML = '<div style="padding:20px;color:var(--text3)">Loading users...</div>';
+  // Refresh with timeout guard — don't block forever
+  try {
+    await Promise.race([
+      refreshData(),
+      new Promise(function(_, reject){ setTimeout(function(){ reject(new Error('timeout')); }, 5000); })
+    ]);
+  } catch(e) { /* use cached S.data on timeout or error */ }
+  var me = S.currentUserObj || {};
+  var users = (S.data && S.data.users) || [];
+  var invites = [];
+  try { invites = await api('/api/auth/invitations'); } catch(e) { invites = []; }
+
+  if (!users.length) {
+    el.innerHTML = '<div class="admin-section-header"><h2>👥 User Management</h2><p>Manage all users, roles and access.</p></div>' +
+      '<div class="admin-card" style="padding:24px;text-align:center;color:var(--text3)">No users found. Try refreshing the page.</div>';
+    return;
+  }
+
+  // Only show pending invites whose email isn't already a registered user
+  var registeredEmails = users.map(function(u){ return u.email.toLowerCase(); });
+  var pendingInvites = invites.filter(function(inv){
+    return inv.status === 'pending' && !registeredEmails.includes(inv.email.toLowerCase());
+  });
+
+  var userRows = users.map(function(u) {
+    var statusBadge = u.is_active !== false
+      ? '<span class="badge badge-success">Active</span>'
+      : '<span class="badge badge-muted">Inactive</span>';
+    var lastLogin = u.last_login ? relativeTime(u.last_login) : 'Never';
+    return '<tr>' +
+      '<td><div style="display:flex;align-items:center;gap:10px">' +
+      '<div class="user-avatar-sm" style="background:' + (u.color||'#6366f1') + '">' + initials(u.name) + '</div>' +
+      '<div><div style="font-weight:600;font-size:13px">' + esc(u.name) + '</div>' +
+      '<div style="font-size:11px;color:var(--text3)">' + esc(u.email) + '</div></div></div></td>' +
+      '<td><select class="input input-sm um-role-sel" data-uid="' + u.id + '">' +
+      ['owner','admin','member'].map(function(r){ return '<option value="'+r+'"'+(u.role===r?' selected':'')+'>'+cap(r)+'</option>'; }).join('') +
+      '</select></td>' +
+      '<td>' + statusBadge + '</td>' +
+      '<td style="font-size:12px;color:var(--text3)">' + lastLogin + '</td>' +
+      '<td>' +
+      (u.id!==me.id ? '<button class="btn btn-sm btn-outline um-toggle-btn" data-uid="'+u.id+'" data-uname="'+esc(u.name)+'" data-active="'+u.is_active+'">'+(u.is_active!==false?'Deactivate':'Activate')+'</button> ' : '') +
+      '<button class="btn btn-sm btn-outline um-pwd-btn" data-uid="'+u.id+'" data-uname="'+esc(u.name)+'">Reset PW</button>' +
+      '</td></tr>';
+  }).join('');
+
+  var inviteRows = pendingInvites.map(function(inv) {
+    var expiresStr = new Date(inv.expires_at) < new Date()
+      ? '<span style="color:#ef4444;font-size:11px">Expired</span>'
+      : '<span style="font-size:11px;color:var(--text3)">Expires ' + relativeTime(inv.expires_at) + '</span>';
+    return '<tr style="opacity:0.85">' +
+      '<td><div style="display:flex;align-items:center;gap:10px">' +
+      '<div class="user-avatar-sm" style="background:#64748b;font-size:10px">?</div>' +
+      '<div><div style="font-weight:600;font-size:13px;color:var(--text2)">(Pending)</div>' +
+      '<div style="font-size:11px;color:var(--text3)">' + esc(inv.email) + '</div></div></div></td>' +
+      '<td><span style="font-size:12px;color:var(--text3)">' + cap(inv.role||'member') + '</span></td>' +
+      '<td><span class="badge" style="background:#f59e0b22;color:#f59e0b;border:1px solid #f59e0b44">✉️ Invited</span></td>' +
+      '<td>' + expiresStr + '</td>' +
+      '<td style="display:flex;gap:6px">' +
+      '<button class="btn btn-sm btn-outline um-resend-invite-btn" data-invite-id="'+inv.id+'" data-email="'+esc(inv.email)+'">Resend</button>' +
+      '<button class="btn btn-sm btn-outline um-cancel-invite-btn" data-invite-id="'+inv.id+'" data-email="'+esc(inv.email)+'">Cancel</button>' +
+      '</td>' +
+      '</tr>';
+  }).join('');
+
+  var totalActive = users.filter(function(u){ return u.is_active!==false; }).length;
+
+  el.innerHTML =
+    '<div class="admin-section-header">' +
+    '<h2>👥 User Management</h2>' +
+    '<p>Manage all users, roles and access in your organization.</p>' +
+    '</div>' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">' +
+    '<div style="font-size:13px;color:var(--text3)">' +
+    users.length + ' registered · ' + totalActive + ' active' +
+    (pendingInvites.length ? ' · <span style="color:#f59e0b">' + pendingInvites.length + ' pending invite' + (pendingInvites.length>1?'s':'') + '</span>' : '') +
+    '</div>' +
+    '<button class="btn btn-primary btn-sm" onclick="openInviteUserModal()">+ Invite User</button>' +
+    '</div>' +
+    '<div class="admin-card" style="padding:0;overflow:hidden">' +
+    '<table class="data-table"><thead><tr>' +
+    '<th>User</th><th>Role</th><th>Status</th><th>Last Login / Expiry</th><th>Actions</th>' +
+    '</tr></thead><tbody>' + userRows + inviteRows + '</tbody></table></div>';
+
+  qsa('.um-role-sel').forEach(function(sel) {
+    sel.addEventListener('change', async function() {
+      try {
+        await api('/api/users/'+sel.dataset.uid, 'PUT', { role: sel.value });
+        popupAlert('Role Updated', 'User role changed to ' + cap(sel.value) + ' successfully.', 'success');
+      } catch(e) {}
+    });
+  });
+  qsa('.um-toggle-btn').forEach(function(btn) {
+    btn.addEventListener('click', async function() {
+      var isActive = btn.dataset.active !== 'false';
+      var name = btn.dataset.uname || 'User';
+      var ok = await confirmDialog((isActive ? 'Deactivate' : 'Activate') + ' ' + name + '?');
+      if (!ok) return;
+      try {
+        await api('/api/users/'+btn.dataset.uid, 'PUT', { is_active: !isActive });
+        popupAlert(isActive ? 'User Deactivated' : 'User Activated',
+          name + ' has been ' + (isActive ? 'deactivated' : 'activated') + '.', isActive ? 'warning' : 'success');
+        renderAdminSettings('user-management');
+      } catch(e) {}
+    });
+  });
+  qsa('.um-pwd-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() { openResetPasswordModal(btn.dataset.uid, btn.dataset.uname); });
+  });
+  qsa('.um-resend-invite-btn').forEach(function(btn) {
+    btn.addEventListener('click', async function() {
+      var email = btn.dataset.email;
+      btn.disabled = true;
+      btn.textContent = 'Sending...';
+      try {
+        var data = await api('/api/auth/invitations/' + btn.dataset.inviteId + '/resend', 'POST');
+        if (data.email_sent) {
+          popupAlert('Invitation Resent', 'A new invitation email has been sent to ' + email + '.', 'success');
+        } else {
+          popupAlert('Invitation Resent', 'Invite link renewed for ' + email + '. Email not sent: ' + (data.email_reason || 'SMTP not configured') + '<br><small style="word-break:break-all">' + (data.invite_url||'') + '</small>', 'info');
+        }
+        renderAdminSettings('user-management');
+      } catch(e) {
+        popupAlert('Error', 'Could not resend invitation.', 'error');
+        btn.disabled = false;
+        btn.textContent = 'Resend';
+      }
+    });
+  });
+  qsa('.um-cancel-invite-btn').forEach(function(btn) {
+    btn.addEventListener('click', async function() {
+      var email = btn.dataset.email;
+      var ok = await confirmDialog('Cancel the invitation for ' + email + '?');
+      if (!ok) return;
+      try {
+        await api('/api/auth/invitations/' + btn.dataset.inviteId, 'DELETE');
+        popupAlert('Invitation Cancelled', 'The invitation to ' + email + ' has been cancelled.', 'warning');
+        renderAdminSettings('user-management');
+      } catch(e) {
+        popupAlert('Error', 'Could not cancel invitation.', 'error');
+      }
+    });
+  });
+}
+
+// ── Roles & Permissions ───────────────────────────────────
+function renderAdminRoles(el) {
+  var perms = [
+    { action: 'Create Space',       owner: true,  admin: true,  member: false },
+    { action: 'Delete Space',       owner: true,  admin: true,  member: false },
+    { action: 'Manage Space Members', owner: true, admin: true, member: false },
+    { action: 'Invite Users',       owner: true,  admin: true,  member: false },
+    { action: 'Manage User Roles',  owner: true,  admin: true,  member: false },
+    { action: 'Create Issue',       owner: true,  admin: true,  member: true  },
+    { action: 'Edit Issue',         owner: true,  admin: true,  member: true  },
+    { action: 'Delete Issue',       owner: true,  admin: true,  member: false },
+    { action: 'Create Sprint',      owner: true,  admin: true,  member: false },
+    { action: 'Start/Complete Sprint', owner: true, admin: true, member: false },
+    { action: 'Add Comments',       owner: true,  admin: true,  member: true  },
+    { action: 'Log Work',           owner: true,  admin: true,  member: true  },
+    { action: 'Manage Custom Fields', owner: true, admin: true, member: false },
+    { action: 'View Admin Settings', owner: true, admin: true,  member: false },
+    { action: 'Deactivate Users',   owner: true,  admin: true,  member: false },
+  ];
+
+  var rows = perms.map(function(p) {
+    return '<tr>' +
+      '<td style="font-size:13px">' + p.action + '</td>' +
+      '<td class="' + (p.owner?'perm-check':'perm-cross') + '">' + (p.owner?'✓':'—') + '</td>' +
+      '<td class="' + (p.admin?'perm-check':'perm-cross') + '">' + (p.admin?'✓':'—') + '</td>' +
+      '<td class="' + (p.member?'perm-check':'perm-cross') + '">' + (p.member?'✓':'—') + '</td>' +
+      '</tr>';
+  }).join('');
+
+  el.innerHTML =
+    '<div class="admin-section-header">' +
+    '<h2>🛡️ Roles &amp; Permissions</h2>' +
+    '<p>Overview of what each role can do in the workspace.</p>' +
+    '</div>' +
+
+    '<div class="admin-card" style="padding:0;overflow:hidden">' +
+    '<table class="perm-table"><thead><tr>' +
+    '<th style="width:55%">Permission</th>' +
+    '<th style="width:15%;text-align:center">Owner</th>' +
+    '<th style="width:15%;text-align:center">Admin</th>' +
+    '<th style="width:15%;text-align:center">Member</th>' +
+    '</tr></thead><tbody>' + rows + '</tbody></table>' +
+    '</div>' +
+
+    '<div class="admin-card" style="margin-top:16px">' +
+    '<h3>Role Descriptions</h3>' +
+    '<div class="admin-field-row"><div><div class="admin-field-label">👑 Owner</div><div class="admin-field-desc">Full control — created the organization. Can manage billing, delete org, all permissions.</div></div></div>' +
+    '<div class="admin-field-row"><div><div class="admin-field-label">🛡️ Admin</div><div class="admin-field-desc">Can manage users, spaces, and all settings. Cannot delete the organization.</div></div></div>' +
+    '<div class="admin-field-row"><div><div class="admin-field-label">👤 Member</div><div class="admin-field-desc">Can create and edit issues, add comments and log work. No admin capabilities.</div></div></div>' +
+    '</div>';
+}
+
+// ── All Spaces ────────────────────────────────────────────
+async function renderAdminSpaces(el) {
+  var spaces = ((S.data && S.data.spaces) || []).filter(function(s){ return !s.is_archived; });
+  var members = (S.data && S.data.space_members) || [];
+  var issues = (S.data && S.data.issues) || [];
+
+  var rows = spaces.map(function(sp) {
+    var mCount = members.filter(function(m){ return m.space_id===sp.id; }).length;
+    var iCount = issues.filter(function(i){ return i.space_id===sp.id; }).length;
+    return '<tr>' +
+      '<td><div style="display:flex;align-items:center;gap:10px">' +
+      '<div style="width:30px;height:30px;border-radius:6px;background:' + (sp.color||'#6366f1') + ';display:flex;align-items:center;justify-content:center;font-size:14px">' + (sp.icon||'📦') + '</div>' +
+      '<div><div style="font-weight:600;font-size:13px">' + esc(sp.name) + '</div>' +
+      '<div style="font-size:11px;color:var(--text3)">' + esc(sp.key) + ' · ' + cap(sp.space_type||'scrum') + '</div></div></div></td>' +
+      '<td style="font-size:13px">' + mCount + ' members</td>' +
+      '<td style="font-size:13px">' + iCount + ' issues</td>' +
+      '<td><span class="badge badge-muted">' + visLabel(sp.visibility) + '</span></td>' +
+      '<td><button class="btn btn-sm btn-outline" onclick="navigateToSpace(\'' + sp.id + '\',\'space-settings\')">Settings</button></td>' +
+      '</tr>';
+  }).join('');
+
+  el.innerHTML =
+    '<div class="admin-section-header">' +
+    '<h2>📦 All Spaces</h2>' +
+    '<p>Overview of all active spaces in the organization.</p>' +
+    '</div>' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">' +
+    '<div style="font-size:13px;color:var(--text3)">' + spaces.length + ' active spaces</div>' +
+    '<button class="btn btn-primary btn-sm" onclick="openSpaceModal()">+ New Space</button>' +
+    '</div>' +
+    '<div class="admin-card" style="padding:0;overflow:hidden">' +
+    '<table class="data-table"><thead><tr>' +
+    '<th>Space</th><th>Members</th><th>Issues</th><th>Visibility</th><th>Actions</th>' +
+    '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+}
+
+// ── Global Custom Fields ──────────────────────────────────
+async function renderAdminCustomFields(el) {
+  var allCF = (S.data && S.data.custom_fields) || [];
+  var spaces = ((S.data && S.data.spaces) || []).filter(function(s){ return !s.is_archived; });
+
+  var rows = allCF.map(function(cf) {
+    var sp = spaces.find(function(s){ return s.id===cf.space_id; });
+    return '<tr>' +
+      '<td style="font-size:13px;font-weight:600">' + esc(cf.name) + '</td>' +
+      '<td><span class="badge badge-muted">' + esc(cf.field_type) + '</span></td>' +
+      '<td style="font-size:12px;color:var(--text3)">' + (sp ? sp.icon+' '+sp.name : '—') + '</td>' +
+      '<td>' + (cf.is_required ? '<span class="badge badge-success">Required</span>' : '<span class="badge badge-muted">Optional</span>') + '</td>' +
+      '</tr>';
+  }).join('');
+
+  el.innerHTML =
+    '<div class="admin-section-header">' +
+    '<h2>🔧 Custom Fields</h2>' +
+    '<p>All custom fields defined across spaces.</p>' +
+    '</div>' +
+    '<div class="admin-card" style="padding:0;overflow:hidden">' +
+    (rows ? '<table class="data-table"><thead><tr><th>Field Name</th><th>Type</th><th>Space</th><th>Required</th></tr></thead><tbody>' + rows + '</tbody></table>' :
+    '<div style="padding:32px;text-align:center;color:var(--text3)">No custom fields defined yet. Add them from each Space → Settings → Custom Fields.</div>') +
+    '</div>' +
+    '<p style="font-size:12px;color:var(--text3);margin-top:12px">To add or edit custom fields, navigate to the specific space → Settings → Custom Fields tab.</p>';
+}
+
+// ── Email / SMTP Settings ─────────────────────────────────
+var _smtpProviders = {
+  gmail:    { label: 'Gmail',              host: 'smtp.gmail.com',          port: 587, note: 'Requires an App Password. Go to myaccount.google.com → Security → 2-Step Verification → App Passwords.' },
+  o365:     { label: 'Outlook / Office 365', host: 'smtp.office365.com',    port: 587, note: 'Use your Microsoft account email and password. If MFA is enabled, create an App Password in your Microsoft account security settings.' },
+  outlook:  { label: 'Hotmail / Outlook Personal', host: 'smtp-mail.outlook.com', port: 587, note: 'Use your Hotmail/Outlook email and password. If MFA is enabled, create an App Password in your Microsoft account.' },
+  custom:   { label: 'Custom SMTP',        host: '',                         port: 587, note: 'Enter your mail server host and credentials manually.' }
+};
+
+async function renderAdminEmailSettings(el) {
+  el.innerHTML = '<div style="padding:20px;color:var(--text3)">Loading...</div>';
+  var cfg = {};
+  try { cfg = await api('/api/admin/email-settings'); } catch(e) { cfg = {}; }
+
+  // Detect current provider from host
+  var currentProvider = 'custom';
+  if ((cfg.smtp_host||'').includes('gmail'))        currentProvider = 'gmail';
+  else if ((cfg.smtp_host||'').includes('office365')) currentProvider = 'o365';
+  else if ((cfg.smtp_host||'').includes('outlook') || (cfg.smtp_host||'').includes('hotmail')) currentProvider = 'outlook';
+
+  var providerBtns = Object.keys(_smtpProviders).map(function(k) {
+    var active = k === currentProvider;
+    return '<button class="btn btn-sm smtp-provider-btn ' + (active ? 'btn-primary' : 'btn-outline') + '" data-provider="'+k+'" style="flex:1">'+_smtpProviders[k].label+'</button>';
+  }).join('');
+
+  el.innerHTML =
+    '<div class="admin-section-header">' +
+    '<h2>✉️ Email / SMTP</h2>' +
+    '<p>Configure outbound email for invitations and all user notifications.</p>' +
+    '</div>' +
+
+    (cfg.env_active ? '<div class="admin-card" style="background:#f0fdf4;border:1px solid #86efac;margin-bottom:16px">' +
+      '<p style="margin:0;color:#16a34a;font-weight:600">✅ Email active via .env — sending from <strong>' + esc(cfg.env_user||'') + '</strong></p>' +
+      '<p style="margin:4px 0 0;font-size:12px;color:#15803d">Emails will be delivered. Save settings below to override.</p>' +
+      '</div>' : '') +
+
+    '<div class="admin-card">' +
+    '<h3 style="margin-top:0">Select Email Provider</h3>' +
+    '<div style="display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap">' + providerBtns + '</div>' +
+
+    '<div id="smtpProviderNote" style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:10px 14px;font-size:12px;color:#1d4ed8;margin-bottom:16px">' +
+      _smtpProviders[currentProvider].note +
+    '</div>' +
+
+    '<div class="admin-field-row">' +
+      '<label class="admin-field-label">SMTP Host</label>' +
+      '<input id="smtpHost" class="input" placeholder="smtp.gmail.com" value="'+(cfg.smtp_host||_smtpProviders[currentProvider].host)+'">' +
+    '</div>' +
+    '<div class="admin-field-row">' +
+      '<label class="admin-field-label">Port</label>' +
+      '<input id="smtpPort" class="input" type="number" placeholder="587" value="'+(cfg.smtp_port||587)+'" style="width:100px">' +
+    '</div>' +
+    '<div class="admin-field-row">' +
+      '<label class="admin-field-label">Email Address</label>' +
+      '<input id="smtpUser" class="input" placeholder="your@email.com" value="'+(cfg.smtp_user||'')+'">' +
+    '</div>' +
+    '<div class="admin-field-row">' +
+      '<label class="admin-field-label">Password / App Password</label>' +
+      '<input id="smtpPass" class="input" type="password" placeholder="Password or App Password" value="'+(cfg.smtp_pass||'')+'">' +
+    '</div>' +
+    '<div class="admin-field-row">' +
+      '<label class="admin-field-label">From Name (optional)</label>' +
+      '<input id="smtpFrom" class="input" placeholder="Neutara SprintBoard <your@email.com>" value="'+(cfg.smtp_from||'')+'">' +
+    '</div>' +
+    '<div style="display:flex;gap:10px;margin-top:20px">' +
+      '<button class="btn btn-primary" id="saveSmtpBtn">Save Settings</button>' +
+      '<button class="btn btn-outline" id="testSmtpBtn">Send Test Email to Me</button>' +
+    '</div>' +
+    '</div>';
+
+  // Provider selector
+  qsa('.smtp-provider-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      qsa('.smtp-provider-btn').forEach(function(b){ b.className = b.className.replace('btn-primary','btn-outline'); });
+      btn.className = btn.className.replace('btn-outline','btn-primary');
+      var p = _smtpProviders[btn.dataset.provider];
+      if (p.host) {
+        qs('#smtpHost').value = p.host;
+        qs('#smtpPort').value = p.port;
+      }
+      qs('#smtpProviderNote').textContent = p.note;
+    });
+  });
+
+  qs('#saveSmtpBtn').addEventListener('click', async function() {
+    var btn = this;
+    btn.disabled = true; btn.textContent = 'Saving...';
+    try {
+      await api('/api/admin/email-settings', 'PUT', {
+        smtp_host: qs('#smtpHost').value.trim(),
+        smtp_port: qs('#smtpPort').value,
+        smtp_user: qs('#smtpUser').value.trim(),
+        smtp_pass: qs('#smtpPass').value,
+        smtp_from: qs('#smtpFrom').value.trim()
+      });
+      popupAlert('Email Settings Saved', 'SMTP configuration saved. Click "Send Test Email" to verify.', 'success');
+    } catch(e) { popupAlert('Error', 'Could not save settings.', 'error'); }
+    btn.disabled = false; btn.textContent = 'Save Settings';
+  });
+
+  qs('#testSmtpBtn').addEventListener('click', async function() {
+    var btn = this;
+    btn.disabled = true; btn.textContent = 'Sending...';
+    try {
+      var r = await api('/api/admin/email-test', 'POST');
+      if (r.sent) {
+        popupAlert('Test Email Sent', 'Check your inbox — test email was delivered successfully!', 'success');
+      } else {
+        popupAlert('Test Failed', (r.reason || 'Could not send.') + ' Check your credentials and try again.', 'error');
+      }
+    } catch(e) { popupAlert('Error', 'Test email failed.', 'error'); }
+    btn.disabled = false; btn.textContent = 'Send Test Email to Me';
+  });
+}
+
+// ── Audit Log ─────────────────────────────────────────────
+async function renderAdminAuditLog(el) {
+  el.innerHTML = '<div style="padding:20px;color:var(--text3)">Loading audit log...</div>';
+  var users = (S.data && S.data.users) || [];
+  var issues = (S.data && S.data.issues) || [];
+
+  // Fetch real issue_history from DB
+  var history = [];
+  try { history = await api('/api/admin/audit-log'); } catch(e) { history = []; }
+
+  var fieldLabel = { title:'Title', status:'Status', priority:'Priority', assignee_id:'Assignee',
+    reporter_id:'Reporter', sprint_id:'Sprint', labels:'Labels', story_points:'Story Points',
+    start_date:'Start Date', due_date:'Due Date', description:'Description' };
+
+  var rows = history.map(function(h) {
+    var u = users.find(function(u){ return u.id===h.user_id; });
+    var issue = issues.find(function(i){ return i.id===h.issue_id; });
+    var fl = fieldLabel[h.field_name] || h.field_name;
+    var action = 'Changed <strong>' + esc(fl) + '</strong>';
+    if (h.old_value && h.new_value) action += ' from <span style="text-decoration:line-through;color:var(--text3)">' + esc(h.old_value) + '</span> → <strong>' + esc(h.new_value) + '</strong>';
+    else if (h.new_value) action += ' to <strong>' + esc(h.new_value) + '</strong>';
+    return '<tr>' +
+      '<td style="font-size:12px;color:var(--text3);white-space:nowrap">' + fmtDateTime(h.created_at) + '</td>' +
+      '<td><div style="display:flex;align-items:center;gap:8px">' +
+      (u ? '<div class="user-avatar-sm" style="background:'+(u.color||'#6366f1')+';width:22px;height:22px;font-size:9px">'+initials(u.name)+'</div>' : '') +
+      '<span style="font-size:12px">' + (u ? esc(u.name) : (h.user_name || 'Unknown')) + '</span></div></td>' +
+      '<td style="font-size:12px">' + action + '</td>' +
+      '<td style="font-size:12px">' +
+      (issue ? '<a onclick="openIssuePage(\''+issue.id+'\')" style="color:var(--accent);cursor:pointer">['+esc(issue.key||'#')+'] '+esc(issue.title)+'</a>' : (h.issue_key ? '['+esc(h.issue_key)+']' : '—')) +
+      '</td>' +
+      '</tr>';
+  }).join('');
+
+  el.innerHTML =
+    '<div class="admin-section-header">' +
+    '<h2>📋 Audit Log</h2>' +
+    '<p>All field changes, status updates, and actions across the organization.</p>' +
+    '</div>' +
+    '<div class="admin-card" style="padding:0;overflow:hidden">' +
+    (rows ? '<table class="data-table"><thead><tr><th>Date & Time</th><th>User</th><th>Change</th><th>Issue</th></tr></thead><tbody>' + rows + '</tbody></table>' :
+    '<div style="padding:32px;text-align:center;color:var(--text3)">No audit history yet. Changes to issues will appear here.</div>') +
+    '</div>';
+}

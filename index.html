@@ -1,0 +1,870 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SprintBoard — Neutara Technologies</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- 1. Loading Overlay -->
+  <div id="loadingOverlay" class="loading-overlay">
+    <div class="loading-content">
+      <div class="spinner"></div>
+      <h1 class="loading-title">SprintBoard Enterprise</h1>
+      <p id="loadingMsg" class="loading-msg">Initializing workspace...</p>
+    </div>
+  </div>
+
+  <!-- 2. Error Overlay -->
+  <div id="errorOverlay" class="error-overlay" hidden>
+    <div class="error-content">
+      <div class="error-icon">⚠️</div>
+      <h2 class="error-title">Something went wrong</h2>
+      <p id="errorMsg" class="error-msg">An unexpected error occurred.</p>
+      <button class="btn btn-primary" onclick="location.reload()">Retry</button>
+    </div>
+  </div>
+
+  <!-- 3. App Container -->
+  <div id="app" class="app-container" hidden>
+
+    <!-- 3a. Left Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <div class="sidebar-logo">
+          <img src="assets/neutara-logo.png" id="sidebarLogoImg" class="sidebar-logo-img" onerror="this.style.display='none';this.nextElementSibling.style.display='block'">
+          <svg class="sidebar-logo-svg" style="display:none" width="32" height="32" viewBox="0 0 32 32">
+            <rect width="32" height="32" rx="6" fill="#2563eb"/>
+            <text x="16" y="22" text-anchor="middle" fill="#fff" font-size="18" font-weight="700" font-family="sans-serif">N</text>
+          </svg>
+        </div>
+        <span class="sidebar-workspace-name">Neutara Technologies</span>
+      </div>
+
+      <div class="sidebar-search">
+        <input type="text" id="sidebarSearch" class="input" placeholder="Search spaces...">
+      </div>
+
+      <nav class="sidebar-nav">
+        <div class="nav-section">
+          <a class="nav-item" data-view="home"><span class="nav-icon">🏠</span> Home</a>
+          <a class="nav-item" data-view="yourwork"><span class="nav-icon">📋</span> Your Work</a>
+          <a class="nav-item" data-view="global-reports"><span class="nav-icon">📊</span> Reports</a>
+        </div>
+
+        <div class="sidebar-section">
+          <div class="sidebar-section-header">
+            <span class="sidebar-section-label">FAVORITES</span>
+            <button class="btn-icon sidebar-collapse-toggle" aria-label="Toggle favorites">▾</button>
+          </div>
+          <div id="favSpaces" class="sidebar-section-content"></div>
+        </div>
+
+        <div class="sidebar-section">
+          <div class="sidebar-section-header">
+            <span class="sidebar-section-label">SPACES</span>
+            <button class="btn-icon" id="newSpaceBtn" aria-label="New space">+</button>
+          </div>
+          <div id="spacesList" class="sidebar-section-content"></div>
+        </div>
+
+        <div id="spaceNav" class="sidebar-section" hidden>
+          <div class="sidebar-section-header">
+            <span class="sidebar-section-label">CURRENT SPACE</span>
+          </div>
+          <a class="nav-item" data-tab="summary"><span class="nav-icon">📋</span> Summary</a>
+          <a class="nav-item" data-tab="backlog"><span class="nav-icon">📦</span> Backlog</a>
+          <a class="nav-item" data-tab="sprint"><span class="nav-icon">🏃</span> Active Sprint</a>
+          <a class="nav-item" data-tab="reports"><span class="nav-icon">📈</span> Reports</a>
+          <a class="nav-item" data-tab="allwork"><span class="nav-icon">📄</span> All Work</a>
+          <a class="nav-item" data-tab="filters"><span class="nav-icon">🔍</span> Filters</a>
+          <a class="nav-item" data-tab="space-settings"><span class="nav-icon">⚙️</span> Settings</a>
+        </div>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div id="sidebarUserFooter" class="sidebar-user-footer"></div>
+        <button class="btn-icon" id="themeToggle" aria-label="Toggle theme">🌙</button>
+      </div>
+    </aside>
+
+    <!-- 3b. Main Content Area -->
+    <div class="main-wrap">
+
+      <!-- Top Bar -->
+      <header class="topbar">
+        <div class="topbar-left">
+          <button class="btn-icon" id="sidebarToggle" aria-label="Toggle sidebar">☰</button>
+          <nav id="breadcrumb" class="breadcrumb"></nav>
+        </div>
+        <div class="topbar-right">
+          <button class="btn-icon topbar-notif-btn" id="notifBtn" aria-label="Notifications">
+            🔔
+            <span class="notif-badge" id="notifBadge" hidden>0</span>
+          </button>
+          <button class="btn-icon" id="themeToggleTop" aria-label="Toggle theme">🌙</button>
+          <button class="btn btn-primary btn-sm" id="createIssueBtn">+ Create Issue</button>
+        </div>
+      </header>
+
+      <!-- Notification Panel -->
+      <div id="notifPanel" class="notif-panel" hidden>
+        <div class="notif-panel-header">
+          <h3>Notifications</h3>
+          <button class="btn btn-link" id="markAllReadBtn">Mark all read</button>
+        </div>
+        <div id="notifList" class="notif-list"></div>
+      </div>
+
+      <!-- Space Header -->
+      <div id="spaceHeader" class="space-header" hidden>
+        <div class="space-header-left">
+          <span id="spaceIcon" class="space-icon"></span>
+          <h2 id="spaceName" class="space-name-title"></h2>
+          <span id="spaceKey" class="badge badge-muted"></span>
+        </div>
+        <div class="space-header-center">
+          <div id="spaceMembers" class="avatar-group"></div>
+          <button class="btn btn-outline btn-sm" id="inviteMemberBtn">+ Invite</button>
+        </div>
+        <div class="space-header-right">
+          <button class="btn-icon" id="starSpaceBtn" aria-label="Favorite space">☆</button>
+          <input type="text" id="spaceSearch" class="input input-sm" placeholder="Search issues...">
+          <button class="btn-icon" id="spaceActionsBtn" aria-label="More actions">⋯</button>
+        </div>
+      </div>
+
+      <!-- Views Container -->
+      <div class="views-container">
+
+        <!-- Home View -->
+        <div class="view" id="view-home">
+          <h1 class="view-title">Dashboard</h1>
+          <div id="homeStats" class="stats-row"></div>
+          <div class="home-columns">
+            <div class="home-column">
+              <h3>My Issues</h3>
+              <div id="myIssues" class="card-list"></div>
+            </div>
+            <div class="home-column">
+              <h3>Recent Activity</h3>
+              <div id="recentActivity" class="activity-feed"></div>
+            </div>
+          </div>
+          <div class="home-spaces-section">
+            <h3>All Spaces</h3>
+            <div id="allSpacesGrid" class="spaces-grid"></div>
+          </div>
+        </div>
+
+        <!-- Your Work View -->
+        <div class="view" id="view-yourwork" hidden>
+          <h1 class="view-title">Your Work</h1>
+          <div class="tabs">
+            <button class="tab active" data-yourwork-tab="assigned">Assigned to Me</button>
+            <button class="tab" data-yourwork-tab="reported">Reported by Me</button>
+            <button class="tab" data-yourwork-tab="recent">Recent</button>
+          </div>
+          <div id="yourWorkContent" class="table-container"></div>
+        </div>
+
+        <!-- Global Reports View -->
+        <div class="view" id="view-global-reports" hidden>
+          <h1 class="view-title">Reports</h1>
+          <p class="placeholder-text">Global reports across all spaces.</p>
+        </div>
+
+        <!-- Admin Settings View -->
+        <div class="view" id="view-settings" hidden>
+          <div class="admin-settings-layout">
+            <!-- Left nav -->
+            <aside class="admin-settings-nav">
+              <div class="admin-settings-nav-title">Administration</div>
+              <div class="admin-nav-group">
+                <div class="admin-nav-label">ORGANIZATION</div>
+                <a class="admin-nav-item active" data-section="org-general">🏢 General</a>
+                <a class="admin-nav-item" data-section="org-security">🔒 Security</a>
+                <a class="admin-nav-item" data-section="org-notifications">🔔 Notifications</a>
+              </div>
+              <div class="admin-nav-group">
+                <div class="admin-nav-label">PEOPLE</div>
+                <a class="admin-nav-item" data-section="user-management">👥 Users</a>
+                <a class="admin-nav-item" data-section="roles-permissions">🛡️ Roles &amp; Permissions</a>
+              </div>
+              <div class="admin-nav-group">
+                <div class="admin-nav-label">PROJECTS</div>
+                <a class="admin-nav-item" data-section="all-spaces">📦 All Spaces</a>
+                <a class="admin-nav-item" data-section="global-custom-fields">🔧 Custom Fields</a>
+              </div>
+              <div class="admin-nav-group">
+                <div class="admin-nav-label">SYSTEM</div>
+                <a class="admin-nav-item" data-section="email-settings">✉️ Email / SMTP</a>
+                <a class="admin-nav-item" data-section="audit-log">📋 Audit Log</a>
+              </div>
+            </aside>
+            <!-- Right content -->
+            <div class="admin-settings-content" id="adminSettingsContent"></div>
+          </div>
+        </div>
+
+        <!-- Spaces Listing View -->
+        <div class="view" id="view-spaces" hidden>
+          <h1 class="view-title">Spaces</h1>
+          <div id="spacesGrid" class="spaces-grid"></div>
+        </div>
+
+        <!-- Space: Summary -->
+        <div class="view" id="view-summary" hidden>
+          <div id="summaryStats" class="stats-row"></div>
+          <div id="summaryWidgets" class="widgets-grid"></div>
+          <div id="summaryCharts" class="charts-row"></div>
+        </div>
+
+        <!-- Space: Backlog -->
+        <div class="view" id="view-backlog" hidden>
+          <div class="view-toolbar">
+            <div class="toolbar-group">
+              <input type="text" class="input input-sm" id="backlogSearch" placeholder="Search backlog...">
+              <button class="btn btn-outline btn-sm" id="backlogFilterBtn">Filters</button>
+            </div>
+            <div class="toolbar-group">
+              <button class="btn btn-primary btn-sm" id="createSprintBtn">+ Create Sprint</button>
+            </div>
+          </div>
+          <div id="backlogContent" class="backlog-content"></div>
+        </div>
+
+        <!-- Space: Active Sprint -->
+        <div class="view" id="view-sprint" hidden>
+          <div id="sprintHeader" class="sprint-header"></div>
+          <div id="sprintBoard" class="board-columns"></div>
+        </div>
+
+        <!-- Space: Reports -->
+        <div class="view" id="view-reports" hidden>
+          <div class="view-toolbar">
+            <select id="reportSelector" class="input">
+              <option value="burndown">Burndown Chart</option>
+              <option value="velocity">Velocity</option>
+              <option value="cumulative">Cumulative Flow</option>
+              <option value="control">Control Chart</option>
+            </select>
+          </div>
+          <div id="reportContent" class="report-content"></div>
+        </div>
+
+        <!-- Space: All Work -->
+        <div class="view" id="view-allwork" hidden>
+          <div class="view-toolbar">
+            <div class="toolbar-group">
+              <input type="text" class="input input-sm" id="allWorkSearch" placeholder="Search issues...">
+              <button class="btn btn-outline btn-sm" id="allWorkFilterBtn">Filters</button>
+            </div>
+            <div class="toolbar-group">
+              <button class="btn btn-outline btn-sm" id="bulkActionsBtn">Bulk Actions</button>
+            </div>
+          </div>
+          <div id="allWorkTable" class="table-container"></div>
+        </div>
+
+        <!-- Space: Filters -->
+        <div class="view" id="view-filters" hidden>
+          <div class="view-toolbar">
+            <div class="toolbar-group"></div>
+            <div class="toolbar-group">
+              <button class="btn btn-primary btn-sm" id="createFilterBtn">+ Create Filter</button>
+            </div>
+          </div>
+          <div id="filtersList" class="filters-list"></div>
+        </div>
+
+        <!-- Space: Settings (with sub-tabs: General, People, Custom Fields) -->
+        <div class="view" id="view-space-settings" hidden>
+          <div class="settings-tabs" id="settingsTabBar">
+            <button class="tab-btn active" data-stab="general" onclick="window._switchSettingsTab('general')">General</button>
+            <button class="tab-btn" data-stab="people" onclick="window._switchSettingsTab('people')">People</button>
+            <button class="tab-btn" data-stab="customfields" onclick="window._switchSettingsTab('customfields')">Custom Fields</button>
+          </div>
+          <div id="settingsTabContent"></div>
+        </div>
+
+        <!-- User Management View -->
+        <div class="view" id="view-user-management" hidden></div>
+
+      </div>
+    </div>
+
+    <!-- 3c. Issue Detail Drawer (Jira-style) -->
+    <div id="issueDrawer" class="issue-drawer" hidden>
+      <div class="drawer-overlay" onclick="closeDrawer()"></div>
+      <div class="drawer-panel">
+        <!-- Drawer Top Bar -->
+        <div class="drawer-topbar">
+          <div class="drawer-topbar-left">
+            <div id="drawerParentBreadcrumb" class="drawer-parent-crumb" style="display:none"></div>
+            <span id="drawerKey" class="drawer-issue-key"></span>
+            <span id="drawerType" class="drawer-type-badge"></span>
+          </div>
+          <div class="drawer-topbar-right">
+            <button id="drawerSaveBtn" class="btn btn-primary btn-sm" style="display:none;margin-right:6px" onclick="saveDrawerChanges()">Save changes</button>
+            <button class="btn-icon" id="drawerStarBtn" title="Star">☆</button>
+            <button class="btn-icon" id="drawerActionsBtn" title="More actions">⋯</button>
+            <button class="btn-icon drawer-close-btn" id="closeDrawer" onclick="closeDrawer()">✕</button>
+          </div>
+        </div>
+
+        <!-- Drawer Body: Main + Sidebar -->
+        <div class="drawer-body">
+          <!-- LEFT: Main content -->
+          <div class="drawer-main">
+            <h1 id="drawerTitle" class="drawer-title" contenteditable="true"></h1>
+
+            <!-- Key Details section (collapsible) -->
+            <div class="drawer-section">
+              <div class="drawer-section-header" onclick="this.parentElement.classList.toggle('collapsed')">
+                <span class="drawer-section-toggle">▾</span>
+                <h3 class="drawer-section-title">Key details</h3>
+              </div>
+              <div class="drawer-section-body">
+                <div class="drawer-detail-row">
+                  <span class="drawer-detail-label">Description</span>
+                  <div id="drawerDesc" class="drawer-desc" contenteditable="true" data-placeholder="Add a description..."></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Subtasks section -->
+            <div class="drawer-section">
+              <div class="drawer-section-header" onclick="this.parentElement.classList.toggle('collapsed')">
+                <span class="drawer-section-toggle">▾</span>
+                <h3 class="drawer-section-title">Subtasks</h3>
+              </div>
+              <div class="drawer-section-body">
+                <div id="drawerSubtasks"></div>
+              </div>
+            </div>
+
+            <!-- Linked Items section -->
+            <div class="drawer-section">
+              <div class="drawer-section-header" onclick="this.parentElement.classList.toggle('collapsed')">
+                <span class="drawer-section-toggle">▾</span>
+                <h3 class="drawer-section-title">Linked work items</h3>
+              </div>
+              <div class="drawer-section-body">
+                <div id="drawerLinks"><p class="text-muted text-sm">No linked items</p></div>
+              </div>
+            </div>
+
+            <!-- Activity section -->
+            <div class="drawer-section drawer-activity-section">
+              <div class="drawer-section-header">
+                <span class="drawer-section-toggle">▾</span>
+                <h3 class="drawer-section-title">Activity</h3>
+              </div>
+              <div class="drawer-section-body" id="activitySectionBody" data-active-tab="all">
+                <div class="drawer-activity-tabs">
+                  <button class="drawer-atab active" data-activity-tab="all">All</button>
+                  <button class="drawer-atab" data-activity-tab="comments">Comments</button>
+                  <button class="drawer-atab" data-activity-tab="history">History</button>
+                  <button class="drawer-atab" data-activity-tab="worklog">Work log</button>
+                </div>
+                <div id="drawerCommentBox" class="drawer-comment-box">
+                  <div id="drawerCommentAvatar" class="drawer-comment-avatar"></div>
+                  <div class="drawer-comment-form">
+                    <textarea id="drawerCommentInput" class="input" placeholder="Add a comment..." rows="2"></textarea>
+                    <div class="drawer-comment-actions">
+                      <button class="btn btn-primary btn-sm" id="drawerCommentSubmit">Comment</button>
+                    </div>
+                  </div>
+                </div>
+                <div id="drawerActivity" class="drawer-activity-list"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- RIGHT: Details sidebar -->
+          <div class="drawer-sidebar">
+            <div class="drawer-sidebar-section">
+              <h4 class="drawer-sidebar-heading">Details</h4>
+              <table class="drawer-fields-table">
+                <tbody>
+                  <tr><td class="dfl">Status</td><td class="dfv"><select id="drawerStatus" class="drawer-select"><option value="To Do">To Do</option><option value="In Progress">In Progress</option><option value="In Review">In Review</option><option value="Done">Done</option></select></td></tr>
+                  <tr><td class="dfl">Priority</td><td class="dfv"><select id="drawerPriority" class="drawer-select"><option value="highest">Highest</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option><option value="lowest">Lowest</option></select></td></tr>
+                  <tr><td class="dfl">Assignee</td><td class="dfv"><select id="drawerAssignee" class="drawer-select"></select></td></tr>
+                  <tr><td class="dfl">Reporter</td><td class="dfv"><select id="drawerReporter" class="drawer-select"></select></td></tr>
+                  <tr><td class="dfl">Sprint</td><td class="dfv"><select id="drawerSprint" class="drawer-select"></select></td></tr>
+                  <tr><td class="dfl">Labels</td><td class="dfv"><input type="text" id="drawerLabels" class="drawer-input" placeholder="Add labels..."></td></tr>
+                  <tr><td class="dfl">Story Points</td><td class="dfv"><input type="number" id="drawerPoints" class="drawer-input" min="0" step="1" placeholder="—"></td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div class="drawer-sidebar-section">
+              <h4 class="drawer-sidebar-heading">Dates</h4>
+              <table class="drawer-fields-table">
+                <tbody>
+                  <tr><td class="dfl">Start Date</td><td class="dfv"><input type="date" id="drawerStartDate" class="drawer-input"></td></tr>
+                  <tr><td class="dfl">Due Date</td><td class="dfv"><input type="date" id="drawerDueDate" class="drawer-input"></td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div class="drawer-sidebar-section">
+              <h4 class="drawer-sidebar-heading">Time Tracking</h4>
+              <table class="drawer-fields-table">
+                <tbody>
+                  <tr><td class="dfl">Time Spent</td><td class="dfv"><span id="drawerTimeSpent" class="drawer-field-value">0h</span></td></tr>
+                  <tr><td class="dfl">Worklogs</td><td class="dfv"><button class="btn btn-outline btn-sm" id="drawerLogTimeBtn">+ Log Time</button></td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div id="drawerCustomFields"></div>
+
+            <div class="drawer-sidebar-section drawer-meta-section">
+              <div class="drawer-meta-row">Created <span id="drawerCreated"></span></div>
+              <div class="drawer-meta-row">Updated <span id="drawerUpdated"></span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- 4. Modals -->
+
+  <!-- Create/Edit Space Modal -->
+  <div id="modal-space" class="modal" hidden>
+    <div class="modal-backdrop" onclick="closeModal('modal-space')"></div>
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 id="spaceModalTitle">Create Space</h3>
+        <button class="btn-icon modal-close" onclick="closeModal('modal-space')">✕</button>
+      </div>
+      <div class="modal-body">
+        <form id="spaceForm">
+          <input type="hidden" id="spaceId">
+          <div class="form-group">
+            <label class="form-label" for="spaceName_input">Name</label>
+            <input type="text" id="spaceName_input" class="input" required>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="spaceKey_input">Key</label>
+            <input type="text" id="spaceKey_input" class="input" maxlength="5" style="text-transform:uppercase" required placeholder="e.g. PROJ">
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="spaceDesc">Description</label>
+            <textarea id="spaceDesc" class="input" rows="3"></textarea>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label" for="spaceIconInput">Icon</label>
+              <input type="text" id="spaceIconInput" class="input" placeholder="🚀">
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="spaceColor">Color</label>
+              <input type="color" id="spaceColor" class="input input-color" value="#2563eb">
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="spaceType">Space Type</label>
+            <select id="spaceType" class="input">
+              <option value="scrum">Scrum</option>
+              <option value="kanban">Kanban</option>
+              <option value="hybrid">Hybrid</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="spaceVisibility">Visibility</label>
+            <select id="spaceVisibility" class="input" onchange="updateVisibilityHint(this.value)">
+              <option value="private">🔒 Private — only added members</option>
+              <option value="team">👥 Team — all org members</option>
+              <option value="org">🌐 Organization — entire organization</option>
+            </select>
+            <div id="visibilityHint" style="font-size:12px;color:var(--text3);margin-top:4px"></div>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal('modal-space')">Cancel</button>
+        <button class="btn btn-primary" type="submit" form="spaceForm">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Create/Edit Sprint Modal -->
+  <div id="modal-sprint" class="modal" hidden>
+    <div class="modal-backdrop" onclick="closeModal('modal-sprint')"></div>
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 id="sprintModalTitle">Create Sprint</h3>
+        <button class="btn-icon modal-close" onclick="closeModal('modal-sprint')">✕</button>
+      </div>
+      <div class="modal-body">
+        <form id="sprintForm">
+          <input type="hidden" id="sprintIdInput">
+          <input type="hidden" id="sprintSpaceId">
+          <div class="form-group">
+            <label class="form-label" for="sprintNameInput">Name</label>
+            <input type="text" id="sprintNameInput" class="input" required>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="sprintGoal">Goal</label>
+            <textarea id="sprintGoal" class="input" rows="3"></textarea>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label" for="sprintStartDate">Start Date</label>
+              <input type="date" id="sprintStartDate" class="input">
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="sprintEndDate">End Date</label>
+              <input type="date" id="sprintEndDate" class="input">
+            </div>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal('modal-sprint')">Cancel</button>
+        <button class="btn btn-primary" type="submit" form="sprintForm">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Create/Edit Issue Modal -->
+  <div id="modal-issue" class="modal" hidden>
+    <div class="modal-backdrop" onclick="closeModal('modal-issue')"></div>
+    <div class="modal-dialog modal-dialog-lg">
+      <div class="modal-header">
+        <h3 id="issueModalTitle">Create Issue</h3>
+        <button class="btn-icon modal-close" onclick="closeModal('modal-issue')">✕</button>
+      </div>
+      <div class="modal-body">
+        <form id="issueForm">
+          <input type="hidden" id="issueId">
+          <input type="hidden" id="issueSpaceId">
+          <input type="hidden" id="issueParentId">
+          <div class="form-group">
+            <label class="form-label" for="issueTitleInput">Title</label>
+            <input type="text" id="issueTitleInput" class="input" required>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label" for="issueType">Type</label>
+              <select id="issueType" class="input">
+                <option value="epic">Epic</option>
+                <option value="story">Story</option>
+                <option value="task" selected>Task</option>
+                <option value="bug">Bug</option>
+                <option value="subtask">Subtask</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="issuePriority">Priority</label>
+              <select id="issuePriority" class="input">
+                <option value="highest">Highest</option>
+                <option value="high">High</option>
+                <option value="medium" selected>Medium</option>
+                <option value="low">Low</option>
+                <option value="lowest">Lowest</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label" for="issueAssignee">Assignee</label>
+              <select id="issueAssignee" class="input"></select>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="issueReporter">Reporter</label>
+              <select id="issueReporter" class="input"></select>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label" for="issueSprint">Sprint</label>
+              <select id="issueSprint" class="input"></select>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="issuePoints">Story Points</label>
+              <input type="number" id="issuePoints" class="input" min="0" step="1">
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="issueLabels">Labels</label>
+            <input type="text" id="issueLabels" class="input" placeholder="Comma-separated labels">
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label" for="issueStartDate">Start Date</label>
+              <input type="date" id="issueStartDate" class="input">
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="issueDueDate">Due Date</label>
+              <input type="date" id="issueDueDate" class="input">
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="issueDescription">Description</label>
+            <textarea id="issueDescription" class="input" rows="4"></textarea>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal('modal-issue')">Cancel</button>
+        <button class="btn btn-primary" type="submit" form="issueForm">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Create/Edit Filter Modal -->
+  <div id="modal-filter" class="modal" hidden>
+    <div class="modal-backdrop" onclick="closeModal('modal-filter')"></div>
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 id="filterModalTitle">Create Filter</h3>
+        <button class="btn-icon modal-close" onclick="closeModal('modal-filter')">✕</button>
+      </div>
+      <div class="modal-body">
+        <form id="filterForm">
+          <input type="hidden" id="filterId">
+          <input type="hidden" id="filterSpaceId">
+          <div class="form-group">
+            <label class="form-label" for="filterNameInput">Name</label>
+            <input type="text" id="filterNameInput" class="input" required>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Conditions</label>
+            <div id="filterConditions" class="filter-conditions"></div>
+            <button type="button" class="btn btn-outline btn-sm" id="addConditionBtn">+ Add Condition</button>
+          </div>
+          <div class="form-row">
+            <div class="form-group form-check">
+              <label><input type="checkbox" id="filterShared"> Shared with team</label>
+            </div>
+            <div class="form-group form-check">
+              <label><input type="checkbox" id="filterPinned"> Pin to sidebar</label>
+            </div>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal('modal-filter')">Cancel</button>
+        <button class="btn btn-primary" type="submit" form="filterForm">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add User to Space Modal -->
+  <div id="modal-invite-member" class="modal" hidden>
+    <div class="modal-backdrop" onclick="closeModal('modal-invite-member')"></div>
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3>Add User to Space</h3>
+        <button class="btn-icon modal-close" onclick="closeModal('modal-invite-member')">✕</button>
+      </div>
+      <div class="modal-body">
+        <form id="inviteMemberForm">
+          <div class="form-group">
+            <label class="form-label" for="inviteMemberSelect">Select User</label>
+            <select id="inviteMemberSelect" class="input" required size="1"></select>
+            <div id="selectedUserPreview" style="display:none;margin-top:8px;padding:10px 12px;background:var(--bg2);border-radius:8px;display:flex;align-items:center;gap:10px"></div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="inviteMemberRole">Role</label>
+            <select id="inviteMemberRole" class="input">
+              <option value="member">Member</option>
+              <option value="site_admin">Site Admin</option>
+              <option value="manager">Manager</option>
+              <option value="viewer">Viewer</option>
+            </select>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal('modal-invite-member')">Cancel</button>
+        <button class="btn btn-primary" type="submit" form="inviteMemberForm">Add to Space</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Custom Field Modal -->
+  <div id="modal-custom-field" class="modal" hidden>
+    <div class="modal-backdrop" onclick="closeModal('modal-custom-field')"></div>
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 id="customFieldModalTitle">Add Custom Field</h3>
+        <button class="btn-icon modal-close" onclick="closeModal('modal-custom-field')">✕</button>
+      </div>
+      <div class="modal-body">
+        <form id="customFieldForm">
+          <input type="hidden" id="customFieldId">
+          <div class="form-group">
+            <label class="form-label" for="customFieldName">Field Name</label>
+            <input type="text" id="customFieldName" class="input" required>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="customFieldType">Field Type</label>
+            <select id="customFieldType" class="input">
+              <option value="text">Text</option>
+              <option value="textarea">Textarea</option>
+              <option value="number">Number</option>
+              <option value="date">Date</option>
+              <option value="select">Select</option>
+              <option value="multi_select">Multi-select</option>
+              <option value="user">User</option>
+              <option value="checkbox">Checkbox</option>
+            </select>
+          </div>
+          <div class="form-group" id="customFieldOptionsGroup" hidden>
+            <label class="form-label" for="customFieldOptions">Options (comma-separated)</label>
+            <input type="text" id="customFieldOptions" class="input" placeholder="Option 1, Option 2, Option 3">
+          </div>
+          <div class="form-group form-check">
+            <label><input type="checkbox" id="customFieldRequired"> Required</label>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal('modal-custom-field')">Cancel</button>
+        <button class="btn btn-primary" type="submit" form="customFieldForm">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Worklog Modal -->
+  <div id="modal-worklog" class="modal" hidden>
+    <div class="modal-backdrop" onclick="closeModal('modal-worklog')"></div>
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3>Log Time</h3>
+        <button class="btn-icon modal-close" onclick="closeModal('modal-worklog')">✕</button>
+      </div>
+      <div class="modal-body">
+        <form id="worklogForm">
+          <input type="hidden" id="worklogIssueId">
+          <div class="form-group">
+            <label class="form-label" for="worklogDate">Date</label>
+            <input type="date" id="worklogDate" class="input" required>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label" for="worklogHours">Hours</label>
+              <input type="number" id="worklogHours" class="input" min="0" value="0">
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="worklogMinutes">Minutes</label>
+              <input type="number" id="worklogMinutes" class="input" min="0" max="59" value="0">
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="worklogDesc">Description</label>
+            <textarea id="worklogDesc" class="input" rows="3"></textarea>
+          </div>
+          <div class="form-group form-check">
+            <label><input type="checkbox" id="worklogBillable" checked> Billable</label>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal('modal-worklog')">Cancel</button>
+        <button class="btn btn-primary" type="submit" form="worklogForm">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Confirm Dialog -->
+  <div id="modal-confirm" class="modal" hidden>
+    <div class="modal-backdrop" onclick="closeModal('modal-confirm')"></div>
+    <div class="modal-dialog modal-dialog-sm">
+      <div class="modal-header">
+        <h3>Confirm</h3>
+        <button class="btn-icon modal-close" onclick="closeModal('modal-confirm')">✕</button>
+      </div>
+      <div class="modal-body">
+        <p id="confirmMsg">Are you sure?</p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="confirmNo" onclick="closeModal('modal-confirm')">Cancel</button>
+        <button class="btn btn-danger" id="confirmYes">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Invite User Modal -->
+  <div id="modal-invite-user" class="modal" hidden>
+    <div class="modal-backdrop" onclick="closeModal('modal-invite-user')"></div>
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3>Invite User</h3>
+        <button class="btn-icon modal-close" onclick="closeModal('modal-invite-user')">✕</button>
+      </div>
+      <div class="modal-body">
+        <form id="inviteUserForm">
+          <div class="form-group">
+            <label class="form-label">Email Address</label>
+            <input type="email" id="inviteUserEmail" class="input" placeholder="user@example.com" required>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Role</label>
+            <select id="inviteUserRole" class="input">
+              <option value="member">Member</option>
+              <option value="admin">Admin</option>
+            </select>
+          </div>
+          <div id="inviteLinkResult" hidden style="margin-top:16px">
+            <label class="form-label">Share this invite link:</label>
+            <div style="display:flex;gap:8px">
+              <input type="text" id="inviteLinkUrl" class="input" readonly style="flex:1">
+              <button type="button" class="btn btn-outline" onclick="navigator.clipboard.writeText(document.getElementById('inviteLinkUrl').value);window.toast&&toast('Copied!')">Copy</button>
+            </div>
+            <p style="margin-top:8px;font-size:12px;color:var(--muted)">Link expires in 7 days. User must set their own password.</p>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal('modal-invite-user')">Close</button>
+        <button class="btn btn-primary" id="inviteUserSubmitBtn" type="submit" form="inviteUserForm">Send Invite</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Reset Password Modal -->
+  <div id="modal-reset-pw" class="modal" hidden>
+    <div class="modal-backdrop" onclick="closeModal('modal-reset-pw')"></div>
+    <div class="modal-dialog modal-dialog-sm">
+      <div class="modal-header">
+        <h3>Reset Password — <span id="resetPwUserName"></span></h3>
+        <button class="btn-icon modal-close" onclick="closeModal('modal-reset-pw')">✕</button>
+      </div>
+      <div class="modal-body">
+        <form id="resetPwForm">
+          <input type="hidden" id="resetPwUserId">
+          <div class="form-group">
+            <label class="form-label">New Password</label>
+            <input type="password" id="resetPwNew" class="input" placeholder="Min 6 characters" required minlength="6">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Confirm Password</label>
+            <input type="password" id="resetPwConfirm" class="input" placeholder="Repeat password" required>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal('modal-reset-pw')">Cancel</button>
+        <button class="btn btn-primary" type="submit" form="resetPwForm">Reset Password</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Container -->
+  <div id="toastContainer" class="toast-container"></div>
+
+  <!-- 5. Scripts -->
+  <script src="app.js"></script>
+
+</body>
+</html>

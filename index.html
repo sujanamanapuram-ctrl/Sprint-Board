@@ -185,12 +185,15 @@
 
           <!-- Filter bar -->
           <div class="wlr-filters">
+            <!-- Space multi-select -->
             <div class="wlr-filter-group">
               <label class="wlr-filter-label">Space</label>
-              <select class="input input-sm" id="wlrSpace">
-                <option value="">All Spaces</option>
-              </select>
+              <div class="aw-ms-wrap">
+                <button class="aw-ms-btn" id="wlrSpaceBtn" onclick="window._wlrToggle('space')">All Spaces <span class="aw-ms-count" id="wlrSpaceCount" hidden></span><span class="aw-ms-arrow">▾</span></button>
+                <div class="aw-ms-panel" id="wlrSpacePanel" hidden></div>
+              </div>
             </div>
+            <!-- Date range -->
             <div class="wlr-filter-group">
               <label class="wlr-filter-label">From</label>
               <input type="date" class="input input-sm" id="wlrFrom">
@@ -199,13 +202,15 @@
               <label class="wlr-filter-label">To</label>
               <input type="date" class="input input-sm" id="wlrTo">
             </div>
+            <!-- User multi-select -->
             <div class="wlr-filter-group">
               <label class="wlr-filter-label">User</label>
-              <select class="input input-sm" id="wlrUser">
-                <option value="">All Users</option>
-                <option value="__me__">My Logs Only</option>
-              </select>
+              <div class="aw-ms-wrap">
+                <button class="aw-ms-btn" id="wlrUserBtn" onclick="window._wlrToggle('user')">All Users <span class="aw-ms-count" id="wlrUserCount" hidden></span><span class="aw-ms-arrow">▾</span></button>
+                <div class="aw-ms-panel" id="wlrUserPanel" hidden></div>
+              </div>
             </div>
+            <!-- Billable -->
             <div class="wlr-filter-group">
               <label class="wlr-filter-label">Billable</label>
               <select class="input input-sm" id="wlrBillable">

@@ -81,14 +81,15 @@ app.get('/api/data', requireAuth, wrap(async (req, res) => {
 
   const sf1 = sid ? ' WHERE space_id=$1' : '';
   const p = sid ? [sid] : [];
-  const [sprints, issues, worklogs, comments, cf, filters, notifs] = await Promise.all([
+  const [sprints, issues, worklogs, comments, cf, filters, notifs, ifv] = await Promise.all([
     q('SELECT * FROM sprints' + sf1, p),
     q('SELECT * FROM issues' + sf1, p),
     q(`SELECT w.* FROM worklogs w${sid ? ' JOIN issues i ON w.issue_id=i.id WHERE i.space_id=$1' : ''}`, p),
     q(`SELECT c.* FROM comments c${sid ? ' JOIN issues i ON c.issue_id=i.id WHERE i.space_id=$1' : ''}`, p),
     q('SELECT * FROM custom_fields' + sf1, p),
     q('SELECT * FROM saved_filters' + sf1, p),
-    q('SELECT * FROM notifications WHERE user_id=$1', [userId])
+    q('SELECT * FROM notifications WHERE user_id=$1', [userId]),
+    q(`SELECT ifv.* FROM issue_field_values ifv JOIN issues i ON ifv.issue_id=i.id${sid ? ' WHERE i.space_id=$1' : ''}`, p)
   ]);
 
   // Filter issues/sprints to only non-archived visible spaces (everyone, including admins)
@@ -99,7 +100,8 @@ app.get('/api/data', requireAuth, wrap(async (req, res) => {
     org: org.rows[0] || null, users: users.rows, spaces: spaces,
     space_members: space_members, space_favorites: sf.rows, sprints: filteredSprints,
     issues: filteredIssues, worklogs: worklogs.rows, comments: comments.rows,
-    custom_fields: cf.rows, saved_filters: filters.rows, notifications: notifs.rows
+    custom_fields: cf.rows, saved_filters: filters.rows, notifications: notifs.rows,
+    issue_field_values: ifv.rows
   });
 }));
 
@@ -166,14 +168,16 @@ app.post('/api/spaces/recover', requireAuth, wrap(async (req, res) => {
   res.status(201).json(r.rows[0]);
 }));
 
-app.put('/api/spaces/:id', wrap(async (req, res) => {
+app.put('/api/spaces/:id', requireAuth, wrap(async (req, res) => {
+  if (req.user.role !== 'admin' && req.user.role !== 'owner') return res.status(403).json({ error: 'Not authorized' });
   const keys = Object.keys(req.body), vals = Object.values(req.body);
   const set = keys.map((k, i) => `${k}=$${i + 2}`).join(',');
   const r = await q(`UPDATE spaces SET ${set},updated_at=NOW() WHERE id=$1 RETURNING *`, [req.params.id, ...vals]);
   res.json(r.rows[0]);
 }));
 
-app.delete('/api/spaces/:id', wrap(async (req, res) => {
+app.delete('/api/spaces/:id', requireAuth, wrap(async (req, res) => {
+  if (req.user.role !== 'admin' && req.user.role !== 'owner') return res.status(403).json({ error: 'Not authorized' });
   await q('UPDATE spaces SET is_archived=true,updated_at=NOW() WHERE id=$1', [req.params.id]);
   res.json({ ok: true });
 }));
@@ -607,8 +611,23 @@ app.delete('/api/filters/:id', wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// ── Move issue (drag/drop backlog ↔ sprint) ───────────────
+app.put('/api/issues/:id/move', requireAuth, wrap(async (req, res) => {
+  const { sprint_id } = req.body;
+  const oldRow = (await q('SELECT sprint_id FROM issues WHERE id=$1', [req.params.id])).rows[0];
+  const r = await q('UPDATE issues SET sprint_id=$1,updated_at=NOW() WHERE id=$2 RETURNING *',
+    [sprint_id || null, req.params.id]);
+  if (oldRow) {
+    await q(`INSERT INTO issue_history(id,issue_id,user_id,field_name,old_value,new_value) VALUES($1,$2,$3,$4,$5,$6)`,
+      [uid(), req.params.id, req.user.user_id, 'sprint_id',
+       oldRow.sprint_id ? String(oldRow.sprint_id) : null,
+       sprint_id ? String(sprint_id) : null]).catch(()=>{});
+  }
+  res.json(r.rows[0]);
+}));
+
 // ── Reports ───────────────────────────────────────────────
-app.get('/api/reports/sprint/:sprintId', wrap(async (req, res) => {
+app.get('/api/reports/sprint/:sprintId', requireAuth, wrap(async (req, res) => {
   const sid = req.params.sprintId;
   const sprint = (await q('SELECT * FROM sprints WHERE id=$1', [sid])).rows[0];
   if (!sprint) return res.status(404).json({ error: 'Sprint not found' });
@@ -622,26 +641,26 @@ app.get('/api/reports/sprint/:sprintId', wrap(async (req, res) => {
   res.json({ sprint, ...stats });
 }));
 
-app.get('/api/reports/velocity', wrap(async (req, res) => {
+app.get('/api/reports/velocity', requireAuth, wrap(async (req, res) => {
   const r = await q(`SELECT id, name, velocity, start_date, end_date
     FROM sprints WHERE space_id=$1 AND status='completed' ORDER BY end_date`,
     [req.query.space_id]);
   res.json(r.rows);
 }));
 
-app.get('/api/reports/status', wrap(async (req, res) => {
+app.get('/api/reports/status', requireAuth, wrap(async (req, res) => {
   const r = await q('SELECT status, COUNT(*)::int AS count FROM issues WHERE space_id=$1 GROUP BY status ORDER BY status',
     [req.query.space_id]);
   res.json(r.rows);
 }));
 
-app.get('/api/reports/priority', wrap(async (req, res) => {
+app.get('/api/reports/priority', requireAuth, wrap(async (req, res) => {
   const r = await q('SELECT priority, COUNT(*)::int AS count FROM issues WHERE space_id=$1 GROUP BY priority ORDER BY priority',
     [req.query.space_id]);
   res.json(r.rows);
 }));
 
-app.get('/api/reports/workload', wrap(async (req, res) => {
+app.get('/api/reports/workload', requireAuth, wrap(async (req, res) => {
   const r = await q(`SELECT u.id, u.name, COUNT(i.id)::int AS issue_count,
       COALESCE(SUM(i.points),0)::int AS total_points
     FROM users u JOIN issues i ON i.assignee_id=u.id

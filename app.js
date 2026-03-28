@@ -1890,13 +1890,20 @@ async function _initAwMultiSelects() {
       return memberMap[v] || v;
     });
   } catch(_) {}
-  // Dynamic: sprints
-  var sprints = (S.data.sprints || []).filter(function(sp) { return sp.space_id == S.currentSpace; });
-  var sprintMap = {};
-  sprints.forEach(function(sp) { sprintMap[sp.id] = sp.name; });
-  _buildAwPanel('sprint', sprints.map(function(sp) { return sp.id; }), function(v) {
-    return sprintMap[v] || v;
-  });
+  // Dynamic: sprints (fetch fresh from DB)
+  try {
+    var sprintRows = await api('/api/sprints?space_id=' + S.currentSpace);
+    var sprintMap = {};
+    (sprintRows || []).forEach(function(sp) { sprintMap[sp.id] = sp.name; });
+    _buildAwPanel('sprint', (sprintRows || []).map(function(sp) { return sp.id; }), function(v) {
+      return sprintMap[v] || v;
+    });
+  } catch(_) {
+    var sprints = (S.data.sprints || []).filter(function(sp) { return sp.space_id == S.currentSpace; });
+    var sprintMap2 = {};
+    sprints.forEach(function(sp) { sprintMap2[sp.id] = sp.name; });
+    _buildAwPanel('sprint', sprints.map(function(sp) { return sp.id; }), function(v) { return sprintMap2[v] || v; });
+  }
   // Update badges for any pre-existing selections
   ['type','status','priority','assignee','sprint'].forEach(_updateAwBadge);
 }
@@ -2868,6 +2875,13 @@ function startDrawerLiveSync(issueId) {
       if (timeSpentEl) timeSpentEl.textContent = fresh.time_spent || '—';
       renderDrawerAttachments(fresh.attachments || []);
       $('drawerUpdated').textContent = fmtDateTime(fresh.updated_at);
+      // Refresh custom fields silently (only if no input is focused inside them)
+      var cfSection = $('drawerCustomFields');
+      var cfFocused = cfSection && cfSection.contains(document.activeElement);
+      if (!cfFocused) renderDrawerCustomFields(fresh.custom_field_values || [], issueId, fresh.space_id || S.currentSpace);
+      // Refresh worklog tab if it is currently active
+      var actBody = $('activitySectionBody');
+      if (actBody && actBody.dataset.activeTab === 'worklog') _renderActivityTab('worklog', fresh);
       _drawerIssueData = fresh;
     } catch(_) {}
   }, 15000);
@@ -3499,8 +3513,11 @@ function renderDrawerCustomFields(cfValues, issueId, spaceId) {
   if (!spaceFields.length) { c.innerHTML = ''; return; }
 
   // Build a lookup map of existing values: field_id → value
+  // Merge: prefer live cfValues passed in, fallback to bulk-loaded S.data.issue_field_values
   var valueMap = {};
-  (cfValues || []).forEach(function(v) { valueMap[v.field_id] = v.value; });
+  var bulkVals = (S.data.issue_field_values || []).filter(function(v) { return v.issue_id == issueId; });
+  bulkVals.forEach(function(v) { valueMap[v.field_id] = v.value; });
+  (cfValues || []).forEach(function(v) { valueMap[v.field_id] = v.value; }); // live values override
 
   var html = '';
   spaceFields.forEach(function(field) {

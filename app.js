@@ -17,6 +17,13 @@ const S = {
   allWorkSort: { col: 'updated_at', dir: 'desc' },
   allWorkSelected: new Set(),
   yourWorkTab: 'assigned',
+  awFilters: {
+    type: [], status: [], priority: [], assignee: [], sprint: [],
+    createdFrom: '', createdTo: '',
+    updatedFrom: '', updatedTo: '',
+    dueDateFrom: '', dueDateTo: '',
+    startDateFrom: '', startDateTo: ''
+  }
 };
 
 // ═══════════════════════════════════════════════════════════
@@ -204,12 +211,16 @@ function closeModal(id) {
 window.openModal = openModal;
 window.closeModal = closeModal;
 
+var _drawerSyncTimer = null;
+function stopDrawerLiveSync() {
+  if (_drawerSyncTimer) { clearInterval(_drawerSyncTimer); _drawerSyncTimer = null; }
+}
+
 function closeDrawer() {
+  stopDrawerLiveSync();
   $('issueDrawer').setAttribute('hidden', '');
   S.drawerIssueId = null;
   window._drawerPending = {};
-  var btn = $('drawerSaveBtn');
-  if (btn) { btn.style.display = 'none'; btn.textContent = 'Save changes'; btn.disabled = false; }
 }
 window.closeDrawer = closeDrawer;
 
@@ -221,27 +232,7 @@ window.openIssuePage = openIssuePage;
 
 // Save all pending drawer changes to DB
 async function saveDrawerChanges() {
-  var btn = $('drawerSaveBtn');
-  var issueId = btn && btn.dataset.issueId;
-  var pending = window._drawerPending || {};
-  if (!issueId || !Object.keys(pending).length) return;
-  btn.disabled = true;
-  btn.textContent = 'Saving…';
-  try {
-    await api('/api/issues/' + issueId, 'PUT', pending);
-    window._drawerPending = {};
-    btn.style.display = 'none';
-    btn.textContent = 'Save changes';
-    btn.disabled = false;
-    // Refresh updated_at timestamp
-    var updated = await api('/api/issues/' + issueId);
-    $('drawerUpdated').textContent = fmtDateTime(updated.updated_at);
-    refreshAfterIssueChange();
-    toast('Changes saved');
-  } catch (e) {
-    btn.textContent = 'Save changes';
-    btn.disabled = false;
-  }
+  // No-op — fields now auto-save via bindDrawerEdits autoSave()
 }
 window.saveDrawerChanges = saveDrawerChanges;
 
@@ -435,11 +426,32 @@ async function init() {
     var issueParam = new URLSearchParams(window.location.search).get('issue');
     if (issueParam) {
       document.body.classList.add('issue-page');
-      // Show only the issue drawer filling the full tab
       $('app').removeAttribute('hidden');
-      setTimeout(function() {
+      // Uncollapse sidebar so it's always visible on issue pages
+      var sb = $('sidebar');
+      if (sb) sb.classList.remove('collapsed');
+      setTimeout(async function() {
+        // Fetch issue first to get its space, then highlight correct space in sidebar
+        try {
+          var iss = await api('/api/issues/' + issueParam);
+          if (iss && iss.space_id) {
+            // Set sidebar state without triggering _exitIssuePage
+            S.currentSpace = iss.space_id;
+            S.currentView = 'space';
+            S.currentTab = 'backlog';
+            var space = getSpace(iss.space_id);
+            if (space) {
+              $('spaceNav').removeAttribute('hidden');
+              qsa('.space-item').forEach(function(el) {
+                el.classList.toggle('active', el.dataset.spaceId === iss.space_id);
+              });
+              qsa('.nav-item[data-tab]').forEach(function(el) {
+                el.classList.toggle('active', el.dataset.tab === 'backlog');
+              });
+            }
+          }
+        } catch(_) {}
         openDrawer(issueParam);
-        // Update tab title once drawer loads
         setTimeout(function() {
           var key = $('drawerKey') && $('drawerKey').textContent;
           var title = $('drawerTitle') && $('drawerTitle').textContent;
@@ -483,7 +495,20 @@ window.doLogout = doLogout;
 // ═══════════════════════════════════════════════════════════
 // NAVIGATION
 // ═══════════════════════════════════════════════════════════
+function _exitIssuePage() {
+  if (!document.body.classList.contains('issue-page')) return;
+  document.body.classList.remove('issue-page');
+  var drawer = $('issueDrawer');
+  if (drawer) drawer.setAttribute('hidden', '');
+}
+
 function navigateTo(view) {
+  // Guard: global Reports is owner-only
+  if (view === 'global-reports' && (S.currentUserObj || {}).role !== 'owner') {
+    toast('Only owners can access Reports', 'error');
+    return;
+  }
+  _exitIssuePage();
   S.currentView = view;
   S.currentSpace = null;
   S.currentTab = null;
@@ -498,7 +523,7 @@ function navigateTo(view) {
   if (target) target.removeAttribute('hidden');
 
   // Breadcrumb
-  var label = view === 'yourwork' ? 'Your Work' : (view === 'global-reports' ? 'Reports' : cap(view));
+  var label = view === 'yourwork' ? 'Your Work' : view === 'global-reports' ? 'Reports' : view === 'worklog-report' ? 'Work Log' : cap(view);
   updateBreadcrumb([{ label: label }]);
 
   // Active state
@@ -511,12 +536,20 @@ function navigateTo(view) {
   // Render
   if (view === 'home') renderHome();
   else if (view === 'yourwork') renderYourWork();
+  else if (view === 'worklog-report') renderWorklogReport();
   else if (view === 'user-management') renderUserManagement();
   else if (view === 'settings') renderAdminSettings('org-general');
 }
 
 function navigateToSpace(spaceId, tab) {
+  _exitIssuePage();
   tab = tab || 'summary';
+  // Reset All Work filters when switching spaces
+  if (spaceId !== S.currentSpace) {
+    S.awFilters = { type:[], status:[], priority:[], assignee:[], sprint:[],
+      createdFrom:'', createdTo:'', updatedFrom:'', updatedTo:'',
+      dueDateFrom:'', dueDateTo:'', startDateFrom:'', startDateTo:'' };
+  }
   S.currentSpace = spaceId;
   S.currentView = 'space';
   S.currentTab = tab;
@@ -546,6 +579,13 @@ function navigateToSpace(spaceId, tab) {
 window.navigateToSpace = navigateToSpace;
 
 function renderTab(tab) {
+  // Guard: Reports and Settings are owner-only
+  var isOwner = (S.currentUserObj || {}).role === 'owner';
+  if (!isOwner && (tab === 'reports' || tab === 'space-settings')) {
+    toast('Only owners can access this section', 'error');
+    return;
+  }
+  _exitIssuePage();
   S.currentTab = tab;
   qsa('.view').forEach(function (v) { v.setAttribute('hidden', ''); });
   qsa('.nav-item[data-tab]').forEach(function (el) { el.classList.toggle('active', el.dataset.tab === tab); });
@@ -567,7 +607,7 @@ function renderTab(tab) {
     case 'backlog': renderBacklog(); break;
     case 'sprint': renderSprintBoard(); break;
     case 'reports': renderReports(); break;
-    case 'allwork': renderAllWork(); break;
+    case 'allwork': refreshData().then(async function() { await _initAwMultiSelects(); renderAllWork(); }); break;
     case 'filters': renderFilters(); break;
     case 'space-settings': renderSpaceSettings(); break;
   }
@@ -617,10 +657,15 @@ async function refreshAfterIssueChange() {
 // ═══════════════════════════════════════════════════════════
 function renderSidebar() {
   var isAdmin = canCreateSpace();
+  var isOwner = (S.currentUserObj || {}).role === 'owner';
 
-  // Show/hide the + new space button based on role
+  // Show/hide the + new space button (owner only)
   var newSpaceBtn = $('newSpaceBtn');
-  if (newSpaceBtn) newSpaceBtn.style.display = isAdmin ? '' : 'none';
+  if (newSpaceBtn) newSpaceBtn.style.display = isOwner ? '' : 'none';
+
+  // Reports and Settings are owner-only
+  var ownerOnlyItems = document.querySelectorAll('[data-tab="reports"], [data-tab="space-settings"], [data-view="global-reports"]');
+  ownerOnlyItems.forEach(function(el) { el.style.display = isOwner ? '' : 'none'; });
 
   // Favorites
   var favRecs = (S.data.space_favorites || []).filter(function (f) { return f.user_id == S.currentUser; });
@@ -823,6 +868,221 @@ function renderYourWorkContent() {
   html += '</tbody></table>';
   $('yourWorkContent').innerHTML = html;
 }
+
+// ═══════════════════════════════════════════════════════════
+// WORK LOG REPORT
+// ═══════════════════════════════════════════════════════════
+var _wlrData = [];      // cached fetched rows
+var _wlrGroup = 'user'; // active group-by
+
+function renderWorklogReport() {
+  // Populate space dropdown
+  var spaceEl = $('wlrSpace');
+  if (spaceEl && spaceEl.options.length <= 1) {
+    (S.data.spaces || []).filter(function(s){ return !s.is_archived; }).forEach(function(s) {
+      var opt = document.createElement('option');
+      opt.value = s.id; opt.textContent = s.name;
+      spaceEl.appendChild(opt);
+    });
+  }
+  // Populate user dropdown
+  var userEl = $('wlrUser');
+  if (userEl && userEl.options.length <= 2) {
+    (S.data.users || []).forEach(function(u) {
+      var opt = document.createElement('option');
+      opt.value = u.id; opt.textContent = u.name;
+      userEl.appendChild(opt);
+    });
+  }
+  // Default date range: current month
+  var wlrFrom = $('wlrFrom'), wlrTo = $('wlrTo');
+  if (wlrFrom && !wlrFrom.value) {
+    var now = new Date();
+    wlrFrom.value = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0') + '-01';
+    var lastDay = new Date(now.getFullYear(), now.getMonth()+1, 0).getDate();
+    wlrTo.value = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0') + '-' + String(lastDay).padStart(2,'0');
+  }
+  // Bind group-by buttons
+  document.querySelectorAll('.wlr-gb-btn').forEach(function(btn) {
+    btn.onclick = function() {
+      _wlrGroup = btn.dataset.wlrGroup;
+      document.querySelectorAll('.wlr-gb-btn').forEach(function(b){ b.classList.toggle('active', b === btn); });
+      _wlrRender();
+    };
+  });
+  // Bind filter controls
+  window._wlrApply = function() { _wlrFetch(); };
+  window._wlrClear = function() {
+    var now = new Date();
+    if ($('wlrSpace')) $('wlrSpace').value = '';
+    if ($('wlrUser')) $('wlrUser').value = '';
+    if ($('wlrBillable')) $('wlrBillable').value = '';
+    if ($('wlrFrom')) $('wlrFrom').value = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0') + '-01';
+    var lastDay = new Date(now.getFullYear(), now.getMonth()+1, 0).getDate();
+    if ($('wlrTo')) $('wlrTo').value = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0') + '-' + String(lastDay).padStart(2,'0');
+    _wlrFetch();
+  };
+  _wlrFetch();
+}
+
+async function _wlrFetch() {
+  var content = $('wlrContent');
+  if (content) content.innerHTML = '<p class="text-muted" style="padding:24px">Loading…</p>';
+
+  var params = [];
+  var spaceId = $('wlrSpace') ? $('wlrSpace').value : '';
+  var userId  = $('wlrUser')  ? $('wlrUser').value  : '';
+  var from    = $('wlrFrom')  ? $('wlrFrom').value  : '';
+  var to      = $('wlrTo')    ? $('wlrTo').value    : '';
+
+  if (spaceId) params.push('space_id=' + encodeURIComponent(spaceId));
+  if (userId && userId !== '__me__') params.push('user_id=' + encodeURIComponent(userId));
+  if (userId === '__me__') params.push('user_id=' + encodeURIComponent(S.currentUser));
+  if (from)   params.push('from=' + encodeURIComponent(from));
+  if (to)     params.push('to='   + encodeURIComponent(to));
+
+  try {
+    var rows = await api('/api/worklogs' + (params.length ? '?' + params.join('&') : ''));
+    // Client-side billable filter
+    var billable = $('wlrBillable') ? $('wlrBillable').value : '';
+    if (billable === '1') rows = rows.filter(function(r){ return r.is_billable; });
+    if (billable === '0') rows = rows.filter(function(r){ return !r.is_billable; });
+    _wlrData = rows || [];
+    _wlrRender();
+  } catch(e) {
+    if (content) content.innerHTML = '<p class="text-muted" style="padding:24px">Failed to load worklogs.</p>';
+  }
+}
+
+function _wlrRender() {
+  var rows = _wlrData;
+  var summary = $('wlrSummary');
+  var content = $('wlrContent');
+  if (!summary || !content) return;
+
+  // ── Summary cards ──
+  var totalMins = rows.reduce(function(s,r){ return s + (r.time_spent||0); }, 0);
+  var billMins  = rows.filter(function(r){ return r.is_billable; }).reduce(function(s,r){ return s+(r.time_spent||0); }, 0);
+  var uniqueTickets = (function(){ var s={}; rows.forEach(function(r){s[r.issue_id]=1;}); return Object.keys(s).length; })();
+  var uniqueUsers   = (function(){ var s={}; rows.forEach(function(r){s[r.user_id]=1;}); return Object.keys(s).length; })();
+
+  summary.innerHTML =
+    _wlrCard('⏱️', 'Total Logged', _wlrFmt(totalMins), '#2563eb') +
+    _wlrCard('💰', 'Billable',     _wlrFmt(billMins),  '#16a34a') +
+    _wlrCard('🎫', 'Tickets',      uniqueTickets,      '#7c3aed') +
+    _wlrCard('👥', 'Contributors', uniqueUsers,        '#ea580c');
+
+  if (!rows.length) {
+    content.innerHTML = '<p class="text-muted placeholder-text">No work logs found for the selected filters.</p>';
+    return;
+  }
+
+  // ── Grouped table ──
+  if (_wlrGroup === 'none') {
+    content.innerHTML = _wlrFlatTable(rows);
+    return;
+  }
+
+  var groups = {};
+  var groupKey = _wlrGroup;
+  rows.forEach(function(r) {
+    var key = groupKey === 'user'  ? (r.user_id)
+            : groupKey === 'space' ? (r.space_id || 'unknown')
+            : (r.work_date ? r.work_date.slice(0,10) : '—');
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(r);
+  });
+
+  var html = '';
+  Object.keys(groups).sort().forEach(function(key) {
+    var grpRows = groups[key];
+    var grpMins = grpRows.reduce(function(s,r){return s+(r.time_spent||0);}, 0);
+    var grpTickets = (function(){ var s={}; grpRows.forEach(function(r){s[r.issue_id]=1;}); return Object.keys(s).length; })();
+
+    var label;
+    if (groupKey === 'user') {
+      var u = findUser(key); label = u ? u.name : (grpRows[0].user_name || key);
+    } else if (groupKey === 'space') {
+      var sp = getSpace(key); label = sp ? sp.name : key;
+    } else {
+      label = key;
+    }
+
+    html += '<div class="wlr-group">' +
+      '<div class="wlr-group-header" onclick="this.parentElement.classList.toggle(\'collapsed\')">' +
+        '<span class="wlr-group-title">' + esc(label) + '</span>' +
+        '<span class="wlr-group-meta">' + grpTickets + ' ticket' + (grpTickets!==1?'s':'') + ' &nbsp;·&nbsp; ' + _wlrFmt(grpMins) + '</span>' +
+        '<span class="wlr-group-arrow">▾</span>' +
+      '</div>' +
+      '<div class="wlr-group-body">' + _wlrFlatTable(grpRows) + '</div>' +
+    '</div>';
+  });
+  content.innerHTML = html;
+}
+
+function _wlrFlatTable(rows) {
+  var html = '<table class="data-table wlr-table"><thead><tr>' +
+    '<th>Date</th><th>User</th><th>Space</th><th>Ticket</th><th>Title</th>' +
+    '<th>Time</th><th>Description</th><th>Billable</th>' +
+    '</tr></thead><tbody>';
+  rows.forEach(function(r) {
+    var u  = findUser(r.user_id);
+    var sp = getSpace(r.space_id);
+    var userName  = u  ? u.name  : (r.user_name  || '—');
+    var spaceName = sp ? sp.name : '—';
+    html += '<tr>' +
+      '<td class="text-muted" style="white-space:nowrap">' + esc(r.work_date ? r.work_date.slice(0,10) : '—') + '</td>' +
+      '<td>' + esc(userName) + '</td>' +
+      '<td>' + esc(spaceName) + '</td>' +
+      '<td class="issue-key" style="cursor:pointer" onclick="openIssuePage(\'' + r.issue_id + '\')">' + esc(r.issue_key || '—') + '</td>' +
+      '<td>' + esc(r.issue_title || '—') + '</td>' +
+      '<td style="white-space:nowrap;font-weight:600;color:var(--accent)">' + _wlrFmt(r.time_spent||0) + '</td>' +
+      '<td class="text-muted">' + esc(r.description || '—') + '</td>' +
+      '<td style="text-align:center">' + (r.is_billable ? '<span style="color:var(--success);font-weight:600">✓</span>' : '<span style="color:var(--text3)">—</span>') + '</td>' +
+    '</tr>';
+  });
+  html += '</tbody></table>';
+  return html;
+}
+
+function _wlrFmt(mins) {
+  if (!mins) return '0h';
+  var h = Math.floor(mins / 60), m = mins % 60;
+  return h ? h + 'h' + (m ? ' ' + m + 'm' : '') : m + 'm';
+}
+
+function _wlrCard(icon, label, value, color) {
+  return '<div class="wlr-card" style="border-top:3px solid ' + color + '">' +
+    '<div class="wlr-card-icon">' + icon + '</div>' +
+    '<div class="wlr-card-body">' +
+      '<div class="wlr-card-value">' + value + '</div>' +
+      '<div class="wlr-card-label">' + label + '</div>' +
+    '</div></div>';
+}
+
+window._wlrExportCSV = function() {
+  if (!_wlrData.length) { toast('No data to export', 'error'); return; }
+  var rows = [['Date','User','Space','Ticket','Title','Time (mins)','Time (h:m)','Description','Billable']];
+  _wlrData.forEach(function(r) {
+    var u = findUser(r.user_id), sp = getSpace(r.space_id);
+    rows.push([
+      r.work_date ? r.work_date.slice(0,10) : '',
+      u ? u.name : (r.user_name||''),
+      sp ? sp.name : '',
+      r.issue_key||'',
+      r.issue_title||'',
+      r.time_spent||0,
+      _wlrFmt(r.time_spent||0),
+      r.description||'',
+      r.is_billable ? 'Yes' : 'No'
+    ]);
+  });
+  var csv = rows.map(function(row){ return row.map(function(c){ return '"'+String(c).replace(/"/g,'""')+'"'; }).join(','); }).join('\n');
+  var blob = new Blob([csv], {type:'text/csv'});
+  var a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = 'worklog-' + new Date().toISOString().slice(0,10) + '.csv';
+  a.click();
+};
 
 // ═══════════════════════════════════════════════════════════
 // SUMMARY TAB
@@ -1043,9 +1303,9 @@ function renderBacklog() {
       '<button class="btn btn-sm btn-outline" onclick="event.stopPropagation();window._deleteSprint(\'' + sp.id + '\')">Delete</button>' +
       '</div></div>' +
       '<div class="backlog-lane-body' + (collapsed ? ' collapsed' : '') + '" data-sprint-drop="' + sp.id + '" ' +
-      'ondragover="event.preventDefault();this.classList.add(\'drag-over\')" ' +
-      'ondragleave="this.classList.remove(\'drag-over\')" ' +
-      'ondrop="window._dropToSprint(event,' + sp.id + ')">';
+      'ondragover="event.preventDefault();event.currentTarget.classList.add(\'drag-over\')" ' +
+      'ondragleave="window._laneDragLeave(event)" ' +
+      'ondrop="window._dropToSprint(event,\'' + sp.id + '\')">';
 
     for (var bi = 0; bi < sprintIssues.length; bi++) {
       html += backlogRow(sprintIssues[bi]);
@@ -1067,8 +1327,8 @@ function renderBacklog() {
     '<div class="lane-header-left"><span class="lane-toggle">\u25BE</span>' +
     '<strong>Backlog</strong> <span class="text-muted">' + backlogIssues.length + ' issues</span></div></div>' +
     '<div class="backlog-lane-body" data-sprint-drop="null" ' +
-    'ondragover="event.preventDefault();this.classList.add(\'drag-over\')" ' +
-    'ondragleave="this.classList.remove(\'drag-over\')" ' +
+    'ondragover="event.preventDefault();event.currentTarget.classList.add(\'drag-over\')" ' +
+    'ondragleave="window._laneDragLeave(event)" ' +
     'ondrop="window._dropToSprint(event,null)">';
 
   for (var bk = 0; bk < backlogIssues.length; bk++) {
@@ -1110,15 +1370,31 @@ window._toggleBacklogLane = function (header) {
   toggle.textContent = body.classList.contains('collapsed') ? '\u25B8' : '\u25BE';
 };
 
+// Drag-leave: only remove highlight when cursor truly leaves the lane (not into a child)
+window._laneDragLeave = function(event) {
+  var lane = event.currentTarget;
+  if (!lane.contains(event.relatedTarget)) {
+    lane.classList.remove('drag-over');
+  }
+};
+
 window._dropToSprint = async function (event, sprintId) {
   event.preventDefault();
-  event.currentTarget.classList.remove('drag-over');
+  // Walk up to find the lane body in case drop fired on a child element
+  var lane = event.target.closest('[data-sprint-drop]') || event.currentTarget;
+  lane.classList.remove('drag-over');
   var issueId = event.dataTransfer.getData('text/plain');
   if (!issueId) return;
-  await api('/api/issues/' + issueId + '/move', 'PUT', { sprint_id: sprintId, position: 0 });
-  await refreshData();
-  renderBacklog();
-  toast('Issue moved');
+  var targetSprintId = lane.getAttribute('data-sprint-drop');
+  if (targetSprintId === 'null') targetSprintId = null;
+  try {
+    await api('/api/issues/' + issueId + '/move', 'PUT', { sprint_id: targetSprintId, position: 0 });
+    await refreshData();
+    renderBacklog();
+    toast('Issue moved');
+  } catch(e) {
+    toast('Failed to move issue — is the server running?', 'error');
+  }
 };
 
 window._addIssueToSprint = function (sprintId) {
@@ -1464,17 +1740,144 @@ function renderWorkloadReport(c, data) {
 // ═══════════════════════════════════════════════════════════
 // ALL WORK TAB
 // ═══════════════════════════════════════════════════════════
+// Populate assignee + sprint filter dropdowns from live DB data
+// ── Multi-select filter helpers ──────────────────────────────────────
+
+function _buildAwPanel(key, values, labelFn) {
+  var panel = $('msd-' + key + '-panel');
+  if (!panel) return;
+  panel.innerHTML = values.map(function(v) {
+    var label = labelFn ? labelFn(v) : v;
+    var checked = S.awFilters[key].indexOf(v) >= 0 ? ' checked' : '';
+    return '<label class="aw-ms-option"><input type="checkbox" value="' + esc(String(v)) + '"' + checked + ' onchange="window.onAwFilterCheck(\'' + key + '\',this)"> ' + esc(String(label)) + '</label>';
+  }).join('');
+}
+
+function _updateAwBadge(key) {
+  var cnt = $('msd-' + key + '-count');
+  var n = S.awFilters[key].length;
+  if (cnt) { cnt.textContent = n; cnt.hidden = n === 0; }
+  var btn = document.querySelector('#msd-' + key + ' .aw-ms-btn');
+  if (btn) btn.classList.toggle('active', n > 0);
+}
+
+// Badge for date filter buttons: shows a dot when any date is set
+function _updateDateBadge(panelKey, fromKey, toKey) {
+  var active = !!(S.awFilters[fromKey] || S.awFilters[toKey]);
+  var cnt = $('msd-' + panelKey + '-count');
+  if (cnt) { cnt.textContent = '✓'; cnt.hidden = !active; }
+  var btn = document.querySelector('#msd-' + panelKey + ' .aw-ms-btn');
+  if (btn) btn.classList.toggle('active', active);
+}
+
+window.onAwFilterCheck = function(key, cb) {
+  var arr = S.awFilters[key];
+  if (cb.checked) { if (arr.indexOf(cb.value) < 0) arr.push(cb.value); }
+  else { var idx = arr.indexOf(cb.value); if (idx >= 0) arr.splice(idx, 1); }
+  _updateAwBadge(key);
+  renderAllWork();
+};
+
+window.toggleAwDropdown = function(key) {
+  var panel = $('msd-' + key + '-panel');
+  if (!panel) return;
+  var isHidden = panel.hidden;
+  // Close all panels first
+  document.querySelectorAll('.aw-ms-panel').forEach(function(p) { p.hidden = true; });
+  panel.hidden = !isHidden;
+};
+
+window.toggleAwDates = function() {
+  var row = $('awDateRow');
+  if (row) row.hidden = !row.hidden;
+  var btn = $('awDateToggle');
+  if (btn) btn.classList.toggle('active', row && !row.hidden);
+};
+
+async function _initAwMultiSelects() {
+  // Static panels
+  _buildAwPanel('type', ['task','bug','story','epic','subtask'], function(v) {
+    return v.charAt(0).toUpperCase() + v.slice(1);
+  });
+  _buildAwPanel('status', ['To Do','In Progress','In Review','Done']);
+  _buildAwPanel('priority', ['critical','high','medium','low'], function(v) {
+    return v.charAt(0).toUpperCase() + v.slice(1);
+  });
+  // Dynamic: assignee (from DB)
+  try {
+    var members = await api('/api/spaces/' + S.currentSpace + '/members');
+    var memberMap = {};
+    (members || []).forEach(function(m) { memberMap[m.user_id] = m.name; });
+    _buildAwPanel('assignee', (members || []).map(function(m) { return m.user_id; }), function(v) {
+      return memberMap[v] || v;
+    });
+  } catch(_) {}
+  // Dynamic: sprints
+  var sprints = (S.data.sprints || []).filter(function(sp) { return sp.space_id == S.currentSpace; });
+  var sprintMap = {};
+  sprints.forEach(function(sp) { sprintMap[sp.id] = sp.name; });
+  _buildAwPanel('sprint', sprints.map(function(sp) { return sp.id; }), function(v) {
+    return sprintMap[v] || v;
+  });
+  // Update badges for any pre-existing selections
+  ['type','status','priority','assignee','sprint'].forEach(_updateAwBadge);
+}
+
+window._awClearFilters = function() {
+  var srch = $('allWorkSearch');
+  if (srch) srch.value = '';
+  S.awFilters = {
+    type: [], status: [], priority: [], assignee: [], sprint: [],
+    createdFrom: '', createdTo: '', updatedFrom: '', updatedTo: '',
+    dueDateFrom: '', dueDateTo: '', startDateFrom: '', startDateTo: ''
+  };
+  ['awCreatedFrom','awCreatedTo','awUpdatedFrom','awUpdatedTo',
+   'awDueDateFrom','awDueDateTo','awStartDateFrom','awStartDateTo'].forEach(function(id) {
+    var el = $(id); if (el) el.value = '';
+  });
+  // Reset date badges
+  [['created','createdFrom','createdTo'],['updated','updatedFrom','updatedTo'],
+   ['duedate','dueDateFrom','dueDateTo'],['startdate','startDateFrom','startDateTo']].forEach(function(d){
+    _updateDateBadge(d[0], d[1], d[2]);
+  });
+  _initAwMultiSelects();
+  renderAllWork();
+};
+
 function renderAllWork() {
-  var search = ($('allWorkSearch').value || '').toLowerCase();
+  var search = ($('allWorkSearch') ? $('allWorkSearch').value : '').toLowerCase().trim();
+  var f = S.awFilters;
+
+  var anyFilter = search ||
+    f.type.length || f.status.length || f.priority.length || f.assignee.length || f.sprint.length ||
+    f.createdFrom || f.createdTo || f.updatedFrom || f.updatedTo ||
+    f.dueDateFrom || f.dueDateTo || f.startDateFrom || f.startDateTo;
+  var clearBtn = $('awClearFilters');
+  if (clearBtn) clearBtn.style.display = anyFilter ? '' : 'none';
+
   var issues = getSpaceIssues(S.currentSpace);
 
-  if (search) {
-    issues = issues.filter(function (i) {
-      return i.title.toLowerCase().indexOf(search) >= 0 ||
-        issueKeyStr(i).toLowerCase().indexOf(search) >= 0 ||
-        (i.assignee_name || '').toLowerCase().indexOf(search) >= 0;
-    });
-  }
+  // Text search
+  if (search) issues = issues.filter(function(i) {
+    return (i.title || '').toLowerCase().indexOf(search) >= 0 ||
+      issueKeyStr(i).toLowerCase().indexOf(search) >= 0 ||
+      (findUser(i.assignee_id) || {name:''}).name.toLowerCase().indexOf(search) >= 0;
+  });
+  // Multi-select filters
+  if (f.type.length)     issues = issues.filter(function(i) { return f.type.indexOf(i.type) >= 0; });
+  if (f.status.length)   issues = issues.filter(function(i) { return f.status.indexOf(i.status) >= 0; });
+  if (f.priority.length) issues = issues.filter(function(i) { return f.priority.indexOf(i.priority) >= 0; });
+  if (f.assignee.length) issues = issues.filter(function(i) { return f.assignee.indexOf(i.assignee_id) >= 0; });
+  if (f.sprint.length)   issues = issues.filter(function(i) { return f.sprint.indexOf(i.sprint_id) >= 0; });
+  // Date range filters
+  if (f.createdFrom)   issues = issues.filter(function(i) { return i.created_at && i.created_at.slice(0,10) >= f.createdFrom; });
+  if (f.createdTo)     issues = issues.filter(function(i) { return i.created_at && i.created_at.slice(0,10) <= f.createdTo; });
+  if (f.updatedFrom)   issues = issues.filter(function(i) { return i.updated_at && i.updated_at.slice(0,10) >= f.updatedFrom; });
+  if (f.updatedTo)     issues = issues.filter(function(i) { return i.updated_at && i.updated_at.slice(0,10) <= f.updatedTo; });
+  if (f.dueDateFrom)   issues = issues.filter(function(i) { return i.due_date && i.due_date.slice(0,10) >= f.dueDateFrom; });
+  if (f.dueDateTo)     issues = issues.filter(function(i) { return i.due_date && i.due_date.slice(0,10) <= f.dueDateTo; });
+  if (f.startDateFrom) issues = issues.filter(function(i) { return i.start_date && i.start_date.slice(0,10) >= f.startDateFrom; });
+  if (f.startDateTo)   issues = issues.filter(function(i) { return i.start_date && i.start_date.slice(0,10) <= f.startDateTo; });
 
   // Sort
   var col = S.allWorkSort.col;
@@ -1503,12 +1906,33 @@ function renderAllWork() {
   var html = '';
 
   if (hasSelected) {
-    html += '<div class="bulk-bar"><span>' + S.allWorkSelected.size + ' selected</span>' +
-      '<select id="bulkStatusChange" class="input input-sm">' +
-      '<option value="">Change Status\u2026</option>' +
-      '<option value="To Do">To Do</option><option value="In Progress">In Progress</option>' +
-      '<option value="In Review">In Review</option><option value="Done">Done</option></select>' +
-      '<button class="btn btn-sm btn-danger" onclick="window._bulkDelete()">Delete</button></div>';
+    // Build assignee options from space members
+    var memberOpts = '<option value="">Assignee\u2026</option>';
+    var spaceMembers = getSpaceMembers(S.currentSpace);
+    if (!spaceMembers.length) spaceMembers = S.data.users || [];
+    spaceMembers.forEach(function(u) { memberOpts += '<option value="' + u.id + '">' + esc(u.name) + '</option>'; });
+
+    // Build sprint options
+    var sprintOpts = '<option value="">Sprint\u2026</option><option value="__none__">None (Backlog)</option>';
+    (S.data.sprints || []).filter(function(sp){ return sp.space_id == S.currentSpace; }).forEach(function(sp) {
+      sprintOpts += '<option value="' + sp.id + '">' + esc(sp.name) + '</option>';
+    });
+
+    html += '<div class="bulk-bar">' +
+      '<span class="bulk-count">' + S.allWorkSelected.size + ' issue' + (S.allWorkSelected.size > 1 ? 's' : '') + ' selected</span>' +
+      '<div class="bulk-actions">' +
+      '<select id="bulkStatusChange" class="input input-sm" title="Change status"><option value="">Status\u2026</option>' +
+        '<option value="To Do">To Do</option><option value="In Progress">In Progress</option>' +
+        '<option value="In Review">In Review</option><option value="Done">Done</option></select>' +
+      '<select id="bulkPriorityChange" class="input input-sm" title="Change priority"><option value="">Priority\u2026</option>' +
+        '<option value="critical">Critical</option><option value="high">High</option>' +
+        '<option value="medium">Medium</option><option value="low">Low</option></select>' +
+      '<select id="bulkAssigneeChange" class="input input-sm" title="Change assignee">' + memberOpts + '</select>' +
+      '<select id="bulkSprintChange" class="input input-sm" title="Move to sprint">' + sprintOpts + '</select>' +
+      '<button class="btn btn-sm btn-danger" onclick="window._bulkDelete()">🗑 Delete</button>' +
+      '</div>' +
+      '<button class="btn btn-sm btn-ghost bulk-deselect" onclick="window._bulkDeselect()" title="Clear selection">✕</button>' +
+      '</div>';
   }
 
   html += '<table class="data-table"><thead><tr>' +
@@ -1523,18 +1947,20 @@ function renderAllWork() {
     var assignee = findUser(iss.assignee_id);
     var sprint = (S.data.sprints || []).find(function (sp) { return sp.id == iss.sprint_id; });
     var checked = S.allWorkSelected.has(iss.id) ? ' checked' : '';
+    var iid = iss.id;
+    var nav = 'openIssuePage(\'' + iid + '\')';
     html += '<tr class="clickable-row">' +
-      '<td><input type="checkbox" data-issue-check="' + iss.id + '"' + checked + '></td>' +
-      '<td class="issue-key" onclick="openIssuePage(\'' + iss.id + '\')">' + esc(issueKeyStr(iss)) + '</td>' +
-      '<td onclick="openIssuePage(\'' + iss.id + '\')">' + esc(iss.title) + '</td>' +
-      '<td>' + typeIcon(iss.type) + ' ' + cap(iss.type) + '</td>' +
-      '<td>' + statusBadge(iss.status) + '</td>' +
-      '<td>' + priorityBadge(iss.priority) + '</td>' +
-      '<td>' + (assignee ? avatarHtml(assignee, 24) + ' ' + esc(assignee.name) : '<span class="text-muted">Unassigned</span>') + '</td>' +
-      '<td>' + (sprint ? esc(sprint.name) : '\u2014') + '</td>' +
-      '<td>' + (iss.story_points != null ? iss.story_points : '\u2014') + '</td>' +
-      '<td>' + (fmtDateShort(iss.due_date) || '\u2014') + '</td>' +
-      '<td class="text-muted">' + relativeTime(iss.updated_at) + '</td></tr>';
+      '<td onclick="event.stopPropagation()"><input type="checkbox" data-issue-check="' + iid + '"' + checked + '></td>' +
+      '<td class="issue-key" onclick="' + nav + '">' + esc(issueKeyStr(iss)) + '</td>' +
+      '<td onclick="' + nav + '">' + esc(iss.title) + '</td>' +
+      '<td onclick="' + nav + '">' + typeIcon(iss.type) + ' ' + cap(iss.type) + '</td>' +
+      '<td onclick="' + nav + '">' + statusBadge(iss.status) + '</td>' +
+      '<td onclick="' + nav + '">' + priorityBadge(iss.priority) + '</td>' +
+      '<td onclick="' + nav + '">' + (assignee ? avatarHtml(assignee, 24) + ' ' + esc(assignee.name) : '<span class="text-muted">Unassigned</span>') + '</td>' +
+      '<td onclick="' + nav + '">' + (sprint ? esc(sprint.name) : '\u2014') + '</td>' +
+      '<td onclick="' + nav + '">' + (iss.story_points != null ? iss.story_points : '\u2014') + '</td>' +
+      '<td onclick="' + nav + '">' + (fmtDateShort(iss.due_date) || '\u2014') + '</td>' +
+      '<td class="text-muted" onclick="' + nav + '">' + relativeTime(iss.updated_at) + '</td></tr>';
   }
   html += '</tbody></table>';
   $('allWorkTable').innerHTML = html;
@@ -1576,20 +2002,28 @@ function renderAllWork() {
     };
   });
 
-  // Bulk status change
-  var bulkSel = $('bulkStatusChange');
-  if (bulkSel) {
-    bulkSel.onchange = async function () {
-      var status = bulkSel.value;
-      if (!status) return;
-      var ids = Array.from(S.allWorkSelected);
-      await api('/api/issues/bulk', 'POST', { ids: ids, updates: { status: status } });
-      S.allWorkSelected.clear();
-      await refreshData();
-      renderAllWork();
-      toast('Updated ' + ids.length + ' issues');
-    };
+  // Generic bulk field change handler
+  async function doBulkUpdate(field, value) {
+    if (!value) return;
+    var ids = Array.from(S.allWorkSelected);
+    var updates = {};
+    if (field === 'sprint_id') updates.sprint_id = value === '__none__' ? null : value;
+    else updates[field] = value;
+    await api('/api/issues/bulk', 'POST', { ids: ids, updates: updates });
+    S.allWorkSelected.clear();
+    await refreshData();
+    renderAllWork();
+    toast('Updated ' + ids.length + ' issue' + (ids.length > 1 ? 's' : ''));
   }
+
+  var bulkStatus   = $('bulkStatusChange');
+  var bulkPriority = $('bulkPriorityChange');
+  var bulkAssignee = $('bulkAssigneeChange');
+  var bulkSprint   = $('bulkSprintChange');
+  if (bulkStatus)   bulkStatus.onchange   = function() { doBulkUpdate('status',      bulkStatus.value); };
+  if (bulkPriority) bulkPriority.onchange = function() { doBulkUpdate('priority',    bulkPriority.value); };
+  if (bulkAssignee) bulkAssignee.onchange = function() { doBulkUpdate('assignee_id', bulkAssignee.value); };
+  if (bulkSprint)   bulkSprint.onchange   = function() { doBulkUpdate('sprint_id',   bulkSprint.value); };
 }
 
 window._bulkDelete = async function () {
@@ -1603,6 +2037,11 @@ window._bulkDelete = async function () {
   await refreshData();
   renderAllWork();
   toast('Deleted ' + ids.length + ' issues');
+};
+
+window._bulkDeselect = function() {
+  S.allWorkSelected.clear();
+  renderAllWork();
 };
 
 // ═══════════════════════════════════════════════════════════
@@ -2071,14 +2510,66 @@ function toggleCustomFieldOptions() {
 
 $('customFieldType').addEventListener('change', toggleCustomFieldOptions);
 
+// Selected files for Create Issue modal (allows individual removal)
+var _selectedFiles = [];
+
+function _renderAttachmentFileList() {
+  var list = $('attachmentFileList');
+  if (!list) return;
+  if (!_selectedFiles.length) { list.innerHTML = ''; return; }
+  list.innerHTML = _selectedFiles.map(function(f, i) {
+    return '<div style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text2);background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:4px 8px;">' +
+      '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">📄 ' + f.name + '</span>' +
+      '<span style="color:var(--text3);flex-shrink:0">' + (f.size > 1048576 ? (f.size/1048576).toFixed(1)+'MB' : (f.size/1024).toFixed(0)+'KB') + '</span>' +
+      '<button type="button" onclick="_removeAttachmentFile('+i+')" style="background:none;border:none;cursor:pointer;color:var(--text3);font-size:14px;line-height:1;padding:0 2px" title="Remove">×</button>' +
+      '</div>';
+  }).join('');
+}
+
+window._removeAttachmentFile = function(idx) {
+  _selectedFiles.splice(idx, 1);
+  _renderAttachmentFileList();
+};
+
 // Show selected file names in Create Issue modal
 document.addEventListener('change', function(e) {
   if (e.target.id === 'issueAttachments') {
-    var names = $('attachmentFileNames');
-    if (!names) return;
     var files = e.target.files;
-    if (!files.length) { names.textContent = 'No files chosen'; return; }
-    names.textContent = files.length === 1 ? files[0].name : files.length + ' files selected';
+    for (var i = 0; i < files.length; i++) _selectedFiles.push(files[i]);
+    e.target.value = ''; // reset input so same file can be re-added
+    _renderAttachmentFileList();
+  }
+});
+
+// ── Comment file attachment helpers ──────────────────────
+var _commentFiles = [];
+
+function _renderCommentFileList() {
+  var list = $('drawerCommentFileList');
+  if (!list) return;
+  if (!_commentFiles.length) { list.innerHTML = ''; return; }
+  list.innerHTML = _commentFiles.map(function(f, i) {
+    var size = f.size > 1048576 ? (f.size/1048576).toFixed(1)+'MB' : (f.size/1024).toFixed(0)+'KB';
+    return '<div class="comment-file-tag">📄 ' + esc(f.name) + ' <span class="comment-file-size">(' + size + ')</span>' +
+      '<button type="button" onclick="window._removeCommentFile(' + i + ')" title="Remove">×</button></div>';
+  }).join('');
+}
+
+window._removeCommentFile = function(i) {
+  _commentFiles.splice(i, 1);
+  _renderCommentFileList();
+};
+
+// Comment attach file input handler
+document.addEventListener('change', function(e) {
+  if (e.target.id === 'drawerCommentAttach') {
+    var files = e.target.files;
+    for (var i = 0; i < files.length; i++) {
+      if (files[i].size > 500 * 1024 * 1024) { toast('File too large (max 500 MB)', 'error'); continue; }
+      _commentFiles.push(files[i]);
+    }
+    e.target.value = '';
+    _renderCommentFileList();
   }
 });
 
@@ -2138,6 +2629,9 @@ $('customFieldForm').addEventListener('submit', async function (e) {
 // ═══════════════════════════════════════════════════════════
 async function openDrawer(issueId) {
   S.drawerIssueId = issueId;
+  // Reset comment file attachments for the new issue
+  _commentFiles = [];
+  _renderCommentFileList();
   var issue;
   try {
     issue = await api('/api/issues/' + issueId);
@@ -2169,10 +2663,41 @@ async function openDrawer(issueId) {
   $('drawerPriority').value = issue.priority || 'medium';
 
   var spaceId = issue.space_id || S.currentSpace;
-  var members = getSpaceMembers(spaceId);
-  if (!members.length) members = S.data.users || [];
-  populateUserSelect($('drawerAssignee'), members, issue.assignee_id);
-  populateUserSelect($('drawerReporter'), members, issue.reporter_id);
+  // Always fetch fresh members from DB so newly-added members show immediately
+  // Build member list: fetch fresh from DB, fall back to cached
+  var freshMembers = [];
+  try {
+    var fetchedMembers = await api('/api/spaces/' + spaceId + '/members');
+    if (fetchedMembers && fetchedMembers.length) {
+      freshMembers = fetchedMembers.map(function(m) {
+        return { id: m.user_id, name: m.name, email: m.email, color: m.color, avatar_url: m.avatar_url };
+      });
+    }
+  } catch(_) {}
+  if (!freshMembers.length) freshMembers = getSpaceMembers(spaceId);
+  if (!freshMembers.length) freshMembers = S.data.users || [];
+
+  // Always include current assignee + reporter + current user so they always appear
+  var allUsers = S.data.users || [];
+  [issue.assignee_id, issue.reporter_id, S.currentUser].forEach(function(uid) {
+    if (!uid) return;
+    var already = freshMembers.some(function(m) { return m.id == uid; });
+    if (!already) {
+      var u = allUsers.find(function(u) { return u.id == uid; });
+      if (u) freshMembers.push(u);
+    }
+  });
+
+  // Store for live sync repopulation
+  window._drawerMembers = freshMembers;
+
+  populateUserSelect($('drawerAssignee'), freshMembers, issue.assignee_id);
+  // If no reporter set, default to current user and save to DB
+  var reporterId = issue.reporter_id || S.currentUser;
+  populateUserSelect($('drawerReporter'), freshMembers, reporterId);
+  if (!issue.reporter_id && S.currentUser) {
+    api('/api/issues/' + issue.id, 'PUT', { reporter_id: S.currentUser }).catch(function(){});
+  }
 
   var sprints = (S.data.sprints || []).filter(function (sp) { return sp.space_id == spaceId; });
   populateSprintSelect($('drawerSprint'), sprints, issue.sprint_id);
@@ -2213,57 +2738,139 @@ async function openDrawer(issueId) {
   var actBody = $('activitySectionBody');
   if (actBody) actBody.dataset.activeTab = 'all';
   renderDrawerActivity(issue);
-  renderDrawerCustomFields(issue.custom_field_values || []);
+  renderDrawerCustomFields(issue.custom_field_values || [], issue.id, issue.space_id || S.currentSpace);
   renderDrawerAttachments(issue.attachments || []);
 
   $('drawerCreated').textContent = fmtDateTime(issue.created_at);
   $('drawerUpdated').textContent = fmtDateTime(issue.updated_at);
 
   bindDrawerEdits(issue);
+  startDrawerLiveSync(issueId);
+}
+
+// Live sync: poll DB every 15s and update drawer if data changed
+function startDrawerLiveSync(issueId) {
+  stopDrawerLiveSync();
+  _drawerSyncTimer = setInterval(async function () {
+    // Don't overwrite while user has pending edits
+    if (window._drawerPending && Object.keys(window._drawerPending).length) return;
+    if (S.drawerIssueId !== issueId) return stopDrawerLiveSync();
+    try {
+      var fresh = await api('/api/issues/' + issueId);
+      if (!fresh) return;
+      // Update right-side fields silently (only if not focused by user)
+      var activeId = document.activeElement && document.activeElement.id;
+      if (activeId !== 'drawerStatus')    $('drawerStatus').value    = fresh.status    || '';
+      if (activeId !== 'drawerPriority')  $('drawerPriority').value  = fresh.priority  || '';
+      if (activeId !== 'drawerAssignee') {
+        // Ensure the new assignee is in the dropdown options before setting value
+        var members = window._drawerMembers || [];
+        if (fresh.assignee_id && !members.some(function(m){return m.id==fresh.assignee_id;})) {
+          var u = (S.data.users||[]).find(function(u){return u.id==fresh.assignee_id;});
+          if (u) { members.push(u); window._drawerMembers = members; populateUserSelect($('drawerAssignee'), members, fresh.assignee_id); }
+        }
+        $('drawerAssignee').value = fresh.assignee_id || '';
+      }
+      if (activeId !== 'drawerReporter') {
+        var members2 = window._drawerMembers || [];
+        if (fresh.reporter_id && !members2.some(function(m){return m.id==fresh.reporter_id;})) {
+          var u2 = (S.data.users||[]).find(function(u){return u.id==fresh.reporter_id;});
+          if (u2) { members2.push(u2); window._drawerMembers = members2; populateUserSelect($('drawerReporter'), members2, fresh.reporter_id); }
+        }
+        $('drawerReporter').value = fresh.reporter_id || '';
+      }
+      if (activeId !== 'drawerSprint')    $('drawerSprint').value    = fresh.sprint_id  || '';
+      if (activeId !== 'drawerLabels')    $('drawerLabels').value    = fresh.labels     || '';
+      if (activeId !== 'drawerPoints')    $('drawerPoints').value    = fresh.story_points != null ? fresh.story_points : '';
+      if (activeId !== 'drawerStartDate') $('drawerStartDate').value = fresh.start_date ? fresh.start_date.slice(0,10) : '';
+      if (activeId !== 'drawerDueDate')   $('drawerDueDate').value   = fresh.due_date   ? fresh.due_date.slice(0,10)   : '';
+      if (activeId !== 'drawerTitle')     $('drawerTitle').textContent = fresh.title    || '';
+      // Update time tracking, attachments, activity
+      var timeSpentEl = document.querySelector('.drawer-time-spent');
+      if (timeSpentEl) timeSpentEl.textContent = fresh.time_spent || '—';
+      renderDrawerAttachments(fresh.attachments || []);
+      $('drawerUpdated').textContent = fmtDateTime(fresh.updated_at);
+      _drawerIssueData = fresh;
+    } catch(_) {}
+  }, 15000);
 }
 window.openDrawer = openDrawer;
 
 function bindDrawerEdits(issue) {
   var issueId = issue.id;
-  // Pending changes — accumulate edits, save all at once when Save button clicked
   var pending = {};
+  var _saveTimer = null;
 
-  function markDirty(field, value) {
+  function autoSave(field, value) {
     pending[field] = value;
-    $('drawerSaveBtn').style.display = '';
+    window._drawerPending = pending;
+    clearTimeout(_saveTimer);
+    _saveTimer = setTimeout(async function () {
+      if (!Object.keys(pending).length) return;
+      var toSave = Object.assign({}, pending);
+      try {
+        await api('/api/issues/' + issueId, 'PUT', toSave);
+        Object.keys(toSave).forEach(function(k) { delete pending[k]; });
+        window._drawerPending = pending;
+        var updated = await api('/api/issues/' + issueId);
+        if (updated) $('drawerUpdated').textContent = fmtDateTime(updated.updated_at);
+        refreshData(); // silent background refresh — no navigation
+        toast('Saved');
+      } catch(e) { toast('Save failed', 'error'); }
+    }, 800);
   }
 
-  // Store issueId on the Save button so saveDrawerChanges() can read it
-  $('drawerSaveBtn').dataset.issueId = issueId;
 
-  $('drawerStatus').onchange    = function () { markDirty('status',      $('drawerStatus').value); };
-  $('drawerPriority').onchange  = function () { markDirty('priority',    $('drawerPriority').value); };
-  $('drawerAssignee').onchange  = function () { markDirty('assignee_id', $('drawerAssignee').value || null); };
-  $('drawerReporter').onchange  = function () { markDirty('reporter_id', $('drawerReporter').value || null); };
-  $('drawerSprint').onchange    = function () { markDirty('sprint_id',   $('drawerSprint').value || null); };
-  $('drawerLabels').oninput     = function () { markDirty('labels',      $('drawerLabels').value); };
+  $('drawerStatus').onchange    = function () { autoSave('status',       $('drawerStatus').value); };
+  $('drawerPriority').onchange  = function () { autoSave('priority',     $('drawerPriority').value); };
+  $('drawerAssignee').onchange  = function () { autoSave('assignee_id',  $('drawerAssignee').value || null); };
+  $('drawerReporter').onchange  = function () { autoSave('reporter_id',  $('drawerReporter').value || null); };
+  $('drawerSprint').onchange    = function () { autoSave('sprint_id',    $('drawerSprint').value || null); };
+  $('drawerLabels').oninput     = function () { autoSave('labels',       $('drawerLabels').value); };
   $('drawerPoints').oninput     = function () {
-    markDirty('story_points', $('drawerPoints').value ? parseInt($('drawerPoints').value, 10) : null);
+    autoSave('story_points', $('drawerPoints').value ? parseInt($('drawerPoints').value, 10) : null);
   };
-  $('drawerStartDate').onchange = function () { markDirty('start_date',  $('drawerStartDate').value || null); };
-  $('drawerDueDate').onchange   = function () { markDirty('due_date',    $('drawerDueDate').value || null); };
-  // Estimate field removed
+  $('drawerStartDate').onchange = function () { autoSave('start_date',   $('drawerStartDate').value || null); };
+  $('drawerDueDate').onchange   = function () { autoSave('due_date',     $('drawerDueDate').value || null); };
 
   $('drawerTitle').oninput = function () {
     var title = $('drawerTitle').textContent.trim();
-    if (title) markDirty('title', title);
+    if (title) autoSave('title', title);
   };
   $('drawerDesc').oninput = function () {
-    markDirty('description', $('drawerDesc').textContent.trim());
+    autoSave('description', $('drawerDesc').textContent.trim());
   };
 
-  // Expose pending to the global save handler
+  // Expose pending to the global save handler (fallback)
   window._drawerPending = pending;
 
   $('drawerCommentSubmit').onclick = async function () {
     var body = $('drawerCommentInput').value.trim();
-    if (!body) return;
-    await api('/api/comments', 'POST', { issue_id: issueId, user_id: S.currentUser, body: body });
+    if (!body && !_commentFiles.length) return;
+    var commentBody = body;
+
+    // Upload attached files first
+    if (_commentFiles.length) {
+      var fd = new FormData();
+      _commentFiles.forEach(function(f) { fd.append('files', f); });
+      try {
+        toast('Uploading attachment…');
+        await fetch('/api/issues/' + issueId + '/attachments', {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + getAuthToken() },
+          body: fd
+        });
+        if (!commentBody) {
+          commentBody = '📎 ' + _commentFiles.map(function(f) { return f.name; }).join(', ');
+        }
+      } catch(e) { toast('Attachment upload failed', 'error'); }
+      _commentFiles = [];
+      _renderCommentFileList();
+    }
+
+    if (commentBody) {
+      await api('/api/comments', 'POST', { issue_id: issueId, user_id: S.currentUser, body: commentBody });
+    }
     $('drawerCommentInput').value = '';
     // Re-fetch full issue so worklogs + history are preserved in _drawerIssueData
     var updated = await api('/api/issues/' + issueId);
@@ -2631,22 +3238,43 @@ function _renderActivityTab(tab, issue) {
     var user = findUser(h.user_id);
     var name = user ? user.name : (h.user_name || 'Unknown');
     var color = (user && user.color) || h.user_color || '#6b7280';
-    var fieldLabel = { title:'Title', status:'Status', priority:'Priority', assignee_id:'Assignee', reporter_id:'Reporter', sprint_id:'Sprint', labels:'Labels', story_points:'Story Points', start_date:'Start Date', due_date:'Due Date', description:'Description' }[h.field_name] || h.field_name;
-    var oldVal = h.old_value || '—';
-    var newVal = h.new_value || '—';
+    var fieldLabel = { title:'Title', status:'Status', priority:'Priority', assignee_id:'Assignee', reporter_id:'Reporter', sprint_id:'Sprint', labels:'Labels', story_points:'Story Points', start_date:'Start Date', due_date:'Due Date', description:'Description', attachment:'Attachment' }[h.field_name] || h.field_name;
+    function resolveVal(field, val) {
+      if (!val || val === '—') return val || '—';
+      if (field === 'sprint_id') {
+        var sp = (S.data.sprints || []).find(function(s){ return s.id === val; });
+        return sp ? sp.name : 'None';
+      }
+      if (field === 'assignee_id' || field === 'reporter_id') {
+        var u = findUser(val);
+        return u ? u.name : val;
+      }
+      return val;
+    }
+    var oldVal = resolveVal(h.field_name, h.old_value) || '—';
+    var newVal = resolveVal(h.field_name, h.new_value) || '—';
+    var isAttach = h.field_name === 'attachment';
+    var actionLine;
+    if (isAttach && !h.old_value) {
+      actionLine = 'Added attachment <strong>📎 ' + esc(h.new_value) + '</strong>';
+    } else if (isAttach && !h.new_value) {
+      actionLine = 'Removed attachment <span style="text-decoration:line-through;color:var(--text3)">📎 ' + esc(h.old_value) + '</span>';
+    } else {
+      actionLine = 'Updated <strong>' + esc(fieldLabel) + '</strong> from <span style="text-decoration:line-through;color:var(--text3)">' + esc(oldVal) + '</span> → <strong>' + esc(newVal) + '</strong>';
+    }
+    var badge = isAttach
+      ? '<span style="font-size:10px;padding:1px 6px;border-radius:10px;background:#fef9c3;color:#854d0e">Attachment</span>'
+      : '<span style="font-size:10px;padding:1px 6px;border-radius:10px;background:#dbeafe;color:#1e40af">Changed</span>';
     return '<div style="display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">' +
       '<div style="width:28px;height:28px;border-radius:50%;background:' + color + ';display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff;flex-shrink:0">' + initials(name) + '</div>' +
       '<div style="flex:1">' +
       '<div style="display:flex;align-items:center;gap:8px;margin-bottom:2px">' +
       '<span style="font-weight:600;font-size:13px">' + esc(name) + '</span>' +
       '<span style="font-size:11px;color:var(--text3)">' + fmtDateTime(h.created_at) + '</span>' +
-      '<span style="font-size:10px;padding:1px 6px;border-radius:10px;background:#dbeafe;color:#1e40af">Changed</span>' +
+      badge +
       '</div>' +
-      '<div style="font-size:12px;color:var(--text2)">' +
-      'Updated <strong>' + esc(fieldLabel) + '</strong> from ' +
-      '<span style="text-decoration:line-through;color:var(--text3)">' + esc(oldVal) + '</span> → ' +
-      '<strong>' + esc(newVal) + '</strong>' +
-      '</div></div></div>';
+      '<div style="font-size:12px;color:var(--text2)">' + actionLine + '</div>' +
+      '</div></div>';
   }
 
   function worklogHtml(w) {
@@ -2751,14 +3379,27 @@ function renderDrawerAttachments(attachments) {
     html += '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)">' +
       '<span style="font-size:18px">' + fileIcon(a.mime_type) + '</span>' +
       '<div style="flex:1;min-width:0">' +
-      '<a href="/uploads/' + esc(a.filename) + '" target="_blank" download="' + esc(a.original_name) + '" style="font-size:13px;color:var(--accent);text-decoration:none;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(a.original_name) + '</a>' +
+      '<a href="/uploads/' + esc(a.filename) + '" target="_blank" style="font-size:13px;color:var(--accent);text-decoration:none;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="Click to open">' + esc(a.original_name) + '</a>' +
       '<div style="font-size:11px;color:var(--text3)">' + fmtSize(a.size) + (a.uploader_name ? ' · ' + esc(a.uploader_name) : '') + ' · ' + fmtDateTime(a.created_at) + '</div>' +
       '</div>' +
+      '<a href="/uploads/' + esc(a.filename) + '" download="' + esc(a.original_name) + '" title="Download" style="color:var(--text3);font-size:15px;text-decoration:none;padding:2px 4px;border-radius:4px;line-height:1" onmouseover="this.style.color=\'var(--accent)\'" onmouseout="this.style.color=\'var(--text3)\'">⬇</a>' +
+      '<button title="Rename" style="background:none;border:none;cursor:pointer;font-size:13px;color:var(--text3);padding:2px 4px;border-radius:4px" onmouseover="this.style.color=\'var(--accent)\'" onmouseout="this.style.color=\'var(--text3)\'" onclick="renameAttachment(\'' + a.id + '\',\'' + esc(a.original_name).replace(/'/g,"&#39;") + '\')">✏</button>' +
       (canDelete ? '<button class="btn btn-sm btn-outline text-danger" style="padding:2px 8px;font-size:11px" onclick="deleteAttachment(\'' + a.id + '\')">✕</button>' : '') +
       '</div>';
   });
   c.innerHTML = html;
 }
+
+window.renameAttachment = async function(id, currentName) {
+  var newName = prompt('Rename attachment:', currentName);
+  if (!newName || newName.trim() === currentName.trim()) return;
+  try {
+    await api('/api/attachments/' + id, 'PATCH', { original_name: newName.trim() });
+    var issue = await api('/api/issues/' + S.drawerIssueId);
+    if (issue) renderDrawerAttachments(issue.attachments || []);
+    toast('Attachment renamed');
+  } catch(e) { toast('Rename failed', 'error'); }
+};
 
 window.deleteAttachment = async function(id) {
   var ok = await confirmDialog('Delete this attachment?');
@@ -2771,16 +3412,87 @@ window.deleteAttachment = async function(id) {
   } catch(e) {}
 };
 
-function renderDrawerCustomFields(cfValues) {
+function renderDrawerCustomFields(cfValues, issueId, spaceId) {
   var c = $('drawerCustomFields');
-  if (!cfValues || !cfValues.length) { c.innerHTML = ''; return; }
+  if (!c) return;
+
+  // Get ALL custom fields defined for this space
+  var spaceFields = (S.data.custom_fields || []).filter(function(f) { return f.space_id == spaceId; });
+  if (!spaceFields.length) { c.innerHTML = ''; return; }
+
+  // Build a lookup map of existing values: field_id → value
+  var valueMap = {};
+  (cfValues || []).forEach(function(v) { valueMap[v.field_id] = v.value; });
+
   var html = '';
-  for (var i = 0; i < cfValues.length; i++) {
-    var cf = cfValues[i];
-    html += '<div class="drawer-field"><label class="drawer-label">' + esc(cf.field_name || cf.name || 'Custom') + '</label>' +
-      '<span class="drawer-value">' + esc(cf.value || '\u2014') + '</span></div>';
-  }
+  spaceFields.forEach(function(field) {
+    var fid = field.id;
+    var fname = esc(field.name);
+    var ftype = field.field_type || 'text';
+    var val = valueMap[fid] !== undefined ? valueMap[fid] : '';
+    var req = field.is_required ? ' <span style="color:var(--red);font-size:11px">*</span>' : '';
+    var inputHtml = '';
+
+    if (ftype === 'text') {
+      inputHtml = '<input type="text" class="input input-sm" data-cf-id="' + fid + '" value="' + esc(val) + '" placeholder="—">';
+    } else if (ftype === 'textarea') {
+      inputHtml = '<textarea class="input input-sm" data-cf-id="' + fid + '" rows="2" placeholder="—">' + esc(val) + '</textarea>';
+    } else if (ftype === 'number') {
+      inputHtml = '<input type="number" class="input input-sm" data-cf-id="' + fid + '" value="' + esc(val) + '" placeholder="—">';
+    } else if (ftype === 'date') {
+      inputHtml = '<input type="date" class="input input-sm" data-cf-id="' + fid + '" value="' + esc(val) + '">';
+    } else if (ftype === 'checkbox') {
+      inputHtml = '<input type="checkbox" data-cf-id="' + fid + '" ' + (val === 'true' ? 'checked' : '') + '>';
+    } else if (ftype === 'select' || ftype === 'multi_select') {
+      var mopts = (Array.isArray(field.options) ? field.options : (field.options || []));
+      var selected = val ? val.split(',').map(function(s){return s.trim();}) : [];
+      inputHtml = '<div class="cf-multiselect" data-cf-id="' + fid + '">' +
+        mopts.map(function(o) {
+          var chk = selected.indexOf(o) >= 0 ? ' checked' : '';
+          return '<label class="cf-ms-opt"><input type="checkbox" value="' + esc(o) + '"' + chk + '> ' + esc(o) + '</label>';
+        }).join('') + '</div>';
+    } else if (ftype === 'user') {
+      var uopts = (S.data.users || [])
+        .map(function(u) { return '<option value="' + u.id + '"' + (u.id == val ? ' selected' : '') + '>' + esc(u.name) + '</option>'; }).join('');
+      inputHtml = '<select class="input input-sm" data-cf-id="' + fid + '"><option value="">—</option>' + uopts + '</select>';
+    }
+
+    html += '<div class="drawer-field">' +
+      '<label class="drawer-label">' + fname + req + '</label>' +
+      '<div class="drawer-cf-input">' + inputHtml + '</div>' +
+      '</div>';
+  });
+
   c.innerHTML = html;
+
+  // Bind save-on-change for all inputs
+  c.querySelectorAll('[data-cf-id]').forEach(function(el) {
+    var fieldId = el.dataset.cfId;
+    var isMulti = el.classList.contains('cf-multiselect');
+    var saveTimer = null;
+
+    function saveValue(value) {
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(function() {
+        api('/api/issues/' + issueId + '/field-values/' + fieldId, 'PUT', { value: value })
+          .catch(function() { toast('Failed to save field', 'error'); });
+      }, 600);
+    }
+
+    if (isMulti) {
+      el.querySelectorAll('input[type="checkbox"]').forEach(function(cb) {
+        cb.addEventListener('change', function() {
+          var vals = Array.from(el.querySelectorAll('input:checked')).map(function(c){return c.value;});
+          saveValue(vals.join(','));
+        });
+      });
+    } else if (el.type === 'checkbox') {
+      el.addEventListener('change', function() { saveValue(el.checked ? 'true' : 'false'); });
+    } else {
+      el.addEventListener('change', function() { saveValue(el.value); });
+      el.addEventListener('input', function() { saveValue(el.value); });
+    }
+  });
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -2788,7 +3500,7 @@ function renderDrawerCustomFields(cfValues) {
 // ═══════════════════════════════════════════════════════════
 function canCreateSpace() {
   var role = (S.currentUserObj || {}).role;
-  return role === 'admin' || role === 'owner';
+  return role === 'owner';
 }
 
 function openSpaceModal(space) {
@@ -2912,6 +3624,12 @@ function resetIssueForm() {
   $('issueStartDate').value = '';
   $('issueDueDate').value = '';
   $('issueDescription').value = '';
+  _selectedFiles = [];
+  _renderAttachmentFileList();
+  var fi = $('issueAttachments');
+  if (fi) fi.value = '';
+  var fnLabel = $('attachmentFileNames');
+  if (fnLabel) fnLabel.textContent = 'No files chosen';
 }
 
 function populateIssueFormSelects() {
@@ -2935,7 +3653,7 @@ async function handleIssueSubmit(e) {
     type: $('issueType').value,
     priority: $('issuePriority').value,
     assignee_id: $('issueAssignee').value || null,
-    reporter_id: $('issueReporter').value || null,
+    reporter_id: $('issueReporter').value || S.currentUser || null,
     sprint_id: $('issueSprint').value || null,
     story_points: $('issuePoints').value ? parseInt($('issuePoints').value, 10) : null,
     labels: $('issueLabels').value,
@@ -2959,10 +3677,9 @@ async function handleIssueSubmit(e) {
     if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Saving…'; }
     var created = await api('/api/issues', 'POST', payload);
     // Upload any attached files
-    var fileInput = $('issueAttachments');
-    if (created && created.id && fileInput && fileInput.files.length) {
+    if (created && created.id && _selectedFiles.length) {
       var fd = new FormData();
-      for (var i = 0; i < fileInput.files.length; i++) fd.append('files', fileInput.files[i]);
+      for (var i = 0; i < _selectedFiles.length; i++) fd.append('files', _selectedFiles[i]);
       try {
         await fetch('/api/issues/' + created.id + '/attachments', {
           method: 'POST',
@@ -3280,6 +3997,35 @@ document.addEventListener('DOMContentLoaded', function () {
   $('allWorkSearch').addEventListener('input', function () {
     if (S.currentTab === 'allwork') renderAllWork();
   });
+  // Date range inputs for All Work
+  // Map: [elementId, S.awFilters key, panelKey, fromKey, toKey]
+  var dateInputMap = [
+    ['awCreatedFrom',   'createdFrom',   'created',   'createdFrom',   'createdTo'],
+    ['awCreatedTo',     'createdTo',     'created',   'createdFrom',   'createdTo'],
+    ['awUpdatedFrom',   'updatedFrom',   'updated',   'updatedFrom',   'updatedTo'],
+    ['awUpdatedTo',     'updatedTo',     'updated',   'updatedFrom',   'updatedTo'],
+    ['awDueDateFrom',   'dueDateFrom',   'duedate',   'dueDateFrom',   'dueDateTo'],
+    ['awDueDateTo',     'dueDateTo',     'duedate',   'dueDateFrom',   'dueDateTo'],
+    ['awStartDateFrom', 'startDateFrom', 'startdate', 'startDateFrom', 'startDateTo'],
+    ['awStartDateTo',   'startDateTo',   'startdate', 'startDateFrom', 'startDateTo'],
+  ];
+  dateInputMap.forEach(function(entry) {
+    var elId = entry[0], filterKey = entry[1], panelKey = entry[2], fromKey = entry[3], toKey = entry[4];
+    var el = $(elId);
+    if (!el) return;
+    el.addEventListener('change', function() {
+      S.awFilters[filterKey] = el.value;
+      _updateDateBadge(panelKey, fromKey, toKey);
+      renderAllWork();
+    });
+  });
+
+  // Close multi-select panels on outside click
+  document.addEventListener('click', function(e) {
+    if (!e.target.closest('.aw-ms-wrap')) {
+      document.querySelectorAll('.aw-ms-panel').forEach(function(p) { p.hidden = true; });
+    }
+  }, true);
 
   // Space search
   $('spaceSearch').addEventListener('input', function () {

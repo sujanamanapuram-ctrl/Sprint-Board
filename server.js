@@ -422,7 +422,7 @@ app.get('/api/worklogs', wrap(async (req, res) => {
   if (from) { where.push(`w.work_date>=$${n++}`); params.push(from); }
   if (to) { where.push(`w.work_date<=$${n++}`); params.push(to); }
   const w = where.length ? ' WHERE ' + where.join(' AND ') : '';
-  const r = await q(`SELECT w.*, u.name AS user_name, i.key AS issue_key, i.title AS issue_title
+  const r = await q(`SELECT w.*, u.name AS user_name, i.key AS issue_key, i.title AS issue_title, i.space_id
     FROM worklogs w JOIN users u ON u.id=w.user_id JOIN issues i ON i.id=w.issue_id${w}
     ORDER BY w.work_date DESC`, params);
   res.json(r.rows);
@@ -482,6 +482,9 @@ app.post('/api/issues/:id/attachments', requireAuth, (req, res, next) => {
           VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
           [uid(), req.params.id, f.filename, f.originalname, f.size, f.mimetype, req.user.user_id]);
         saved.push(r.rows[0]);
+        await q(`INSERT INTO issue_history(id,issue_id,user_id,field_name,old_value,new_value)
+          VALUES($1,$2,$3,'attachment',NULL,$4)`,
+          [uid(), req.params.id, req.user.user_id, f.originalname]);
       }
       res.status(201).json(saved);
     } catch(e) { next(e); }
@@ -495,7 +498,22 @@ app.delete('/api/attachments/:id', requireAuth, wrap(async (req, res) => {
     return res.status(403).json({ error: 'Cannot delete another user\'s attachment' });
   try { fs.unlinkSync(path.join(uploadsDir, a.filename)); } catch(_) {}
   await q('DELETE FROM issue_attachments WHERE id=$1', [req.params.id]);
+  await q(`INSERT INTO issue_history(id,issue_id,user_id,field_name,old_value,new_value)
+    VALUES($1,$2,$3,'attachment',$4,NULL)`,
+    [uid(), a.issue_id, req.user.user_id, a.original_name]);
   res.json({ ok: true });
+}));
+
+// Rename attachment
+app.patch('/api/attachments/:id', requireAuth, wrap(async (req, res) => {
+  const { original_name } = req.body;
+  if (!original_name) return res.status(400).json({ error: 'name required' });
+  const a = (await q('SELECT * FROM issue_attachments WHERE id=$1', [req.params.id])).rows[0];
+  if (!a) return res.status(404).json({ error: 'Not found' });
+  if (a.uploaded_by !== req.user.user_id && req.user.role !== 'admin' && req.user.role !== 'owner')
+    return res.status(403).json({ error: 'Forbidden' });
+  const r = await q('UPDATE issue_attachments SET original_name=$2 WHERE id=$1 RETURNING *', [req.params.id, original_name]);
+  res.json(r.rows[0]);
 }));
 
 // ── Custom Fields ─────────────────────────────────────────
@@ -506,17 +524,49 @@ app.get('/api/custom-fields', wrap(async (req, res) => {
 
 app.post('/api/custom-fields', wrap(async (req, res) => {
   const b = req.body;
+  // options must be JSON-stringified for jsonb column (pg binds arrays as PG arrays otherwise)
+  const opts = b.options != null ? JSON.stringify(Array.isArray(b.options) ? b.options : []) : '[]';
   const r = await q(`INSERT INTO custom_fields(id,space_id,name,field_type,options,is_required,position)
-    VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-    [uid(), b.space_id, b.name, b.field_type, b.options || null, b.is_required || false, b.position || 0]);
+    VALUES($1,$2,$3,$4,$5::jsonb,$6,$7) RETURNING *`,
+    [uid(), b.space_id, b.name, b.field_type, opts, b.is_required || false, b.position || 0]);
   res.status(201).json(r.rows[0]);
 }));
 
 app.put('/api/custom-fields/:id', wrap(async (req, res) => {
-  const keys = Object.keys(req.body), vals = Object.values(req.body);
-  const set = keys.map((k, i) => `${k}=$${i + 2}`).join(',');
-  const r = await q(`UPDATE custom_fields SET ${set} WHERE id=$1 RETURNING *`, [req.params.id, ...vals]);
+  const body = { ...req.body };
+  // Fix options jsonb binding same as POST
+  if (body.options !== undefined) {
+    body.options = JSON.stringify(Array.isArray(body.options) ? body.options : []);
+  }
+  const keys = Object.keys(body);
+  const vals = keys.map(k => k === 'options' ? body[k] + '::jsonb' : body[k]);
+  // Build set clause, casting options to jsonb
+  const set = keys.map((k, i) => k === 'options' ? `options=$${i+2}::jsonb` : `${k}=$${i+2}`).join(',');
+  const r = await q(`UPDATE custom_fields SET ${set} WHERE id=$1 RETURNING *`,
+    [req.params.id, ...keys.map(k => body[k])]);
   res.json(r.rows[0]);
+}));
+
+// Upsert a single custom field value for an issue
+app.put('/api/issues/:id/field-values/:fieldId', requireAuth, wrap(async (req, res) => {
+  const { id: issueId, fieldId } = req.params;
+  const { value } = req.body;
+  // Check if record exists
+  const existing = await q('SELECT id FROM issue_field_values WHERE issue_id=$1 AND field_id=$2', [issueId, fieldId]);
+  if (existing.rows.length) {
+    if (value === '' || value === null || value === undefined) {
+      await q('DELETE FROM issue_field_values WHERE issue_id=$1 AND field_id=$2', [issueId, fieldId]);
+    } else {
+      await q('UPDATE issue_field_values SET value=$1 WHERE issue_id=$2 AND field_id=$3', [String(value), issueId, fieldId]);
+    }
+  } else if (value !== '' && value !== null && value !== undefined) {
+    await q('INSERT INTO issue_field_values(id,issue_id,field_id,value) VALUES($1,$2,$3,$4)',
+      [uid(), issueId, fieldId, String(value)]);
+  }
+  // Track in history
+  await q(`INSERT INTO issue_history(id,issue_id,user_id,field_name,new_value,created_at)
+    VALUES($1,$2,$3,$4,$5,NOW())`, [uid(), issueId, req.user.id, 'custom_field_' + fieldId, String(value || '')]);
+  res.json({ ok: true });
 }));
 
 app.delete('/api/custom-fields/:id', wrap(async (req, res) => {

@@ -52,6 +52,7 @@
           <a class="nav-item" data-view="home"><span class="nav-icon">🏠</span> Home</a>
           <a class="nav-item" data-view="yourwork"><span class="nav-icon">📋</span> Your Work</a>
           <a class="nav-item" data-view="global-reports"><span class="nav-icon">📊</span> Reports</a>
+          <a class="nav-item" data-view="worklog-report"><span class="nav-icon">⏱️</span> Work Log</a>
         </div>
 
         <div class="sidebar-section">
@@ -79,7 +80,6 @@
           <a class="nav-item" data-tab="sprint"><span class="nav-icon">🏃</span> Active Sprint</a>
           <a class="nav-item" data-tab="reports"><span class="nav-icon">📈</span> Reports</a>
           <a class="nav-item" data-tab="allwork"><span class="nav-icon">📄</span> All Work</a>
-          <a class="nav-item" data-tab="filters"><span class="nav-icon">🔍</span> Filters</a>
           <a class="nav-item" data-tab="space-settings"><span class="nav-icon">⚙️</span> Settings</a>
         </div>
       </nav>
@@ -176,6 +176,64 @@
           <p class="placeholder-text">Global reports across all spaces.</p>
         </div>
 
+        <!-- Work Log Report View -->
+        <div class="view" id="view-worklog-report" hidden>
+          <div class="wlr-header">
+            <h1 class="view-title" style="margin:0">Work Log</h1>
+            <button class="btn btn-primary btn-sm" onclick="window._wlrExportCSV()">⬇ Export CSV</button>
+          </div>
+
+          <!-- Filter bar -->
+          <div class="wlr-filters">
+            <div class="wlr-filter-group">
+              <label class="wlr-filter-label">Space</label>
+              <select class="input input-sm" id="wlrSpace">
+                <option value="">All Spaces</option>
+              </select>
+            </div>
+            <div class="wlr-filter-group">
+              <label class="wlr-filter-label">From</label>
+              <input type="date" class="input input-sm" id="wlrFrom">
+            </div>
+            <div class="wlr-filter-group">
+              <label class="wlr-filter-label">To</label>
+              <input type="date" class="input input-sm" id="wlrTo">
+            </div>
+            <div class="wlr-filter-group">
+              <label class="wlr-filter-label">User</label>
+              <select class="input input-sm" id="wlrUser">
+                <option value="">All Users</option>
+                <option value="__me__">My Logs Only</option>
+              </select>
+            </div>
+            <div class="wlr-filter-group">
+              <label class="wlr-filter-label">Billable</label>
+              <select class="input input-sm" id="wlrBillable">
+                <option value="">All</option>
+                <option value="1">Billable only</option>
+                <option value="0">Non-billable only</option>
+              </select>
+            </div>
+            <button class="btn btn-outline btn-sm" onclick="window._wlrApply()">Apply</button>
+            <button class="btn btn-ghost btn-sm" onclick="window._wlrClear()">Clear</button>
+          </div>
+
+          <!-- Summary cards -->
+          <div class="wlr-summary" id="wlrSummary"></div>
+
+          <!-- Group by toggle -->
+          <div class="wlr-groupby-bar">
+            <span class="wlr-groupby-label">Group by:</span>
+            <button class="wlr-gb-btn active" data-wlr-group="user">👤 User</button>
+            <button class="wlr-gb-btn" data-wlr-group="space">🗂 Space</button>
+            <button class="wlr-gb-btn" data-wlr-group="date">📅 Date</button>
+            <button class="wlr-gb-btn" data-wlr-group="none">📋 All Entries</button>
+          </div>
+
+          <!-- Results -->
+          <div id="wlrContent" class="wlr-content"></div>
+        </div>
+
         <!-- Admin Settings View -->
         <div class="view" id="view-settings" hidden>
           <div class="admin-settings-layout">
@@ -257,15 +315,90 @@
 
         <!-- Space: All Work -->
         <div class="view" id="view-allwork" hidden>
-          <div class="view-toolbar">
-            <div class="toolbar-group">
-              <input type="text" class="input input-sm" id="allWorkSearch" placeholder="Search issues...">
-              <button class="btn btn-outline btn-sm" id="allWorkFilterBtn">Filters</button>
+          <!-- Filter bar -->
+          <div class="aw-filter-bar">
+            <input type="text" class="input input-sm" id="allWorkSearch" placeholder="🔍 Search title, key..." style="width:180px">
+
+            <div class="aw-ms-wrap" id="msd-type">
+              <button class="aw-ms-btn" onclick="window.toggleAwDropdown('type')">All Types <span class="aw-ms-count" id="msd-type-count" hidden></span><span class="aw-ms-arrow">▾</span></button>
+              <div class="aw-ms-panel" id="msd-type-panel" hidden></div>
             </div>
-            <div class="toolbar-group">
-              <button class="btn btn-outline btn-sm" id="bulkActionsBtn">Bulk Actions</button>
+
+            <div class="aw-ms-wrap" id="msd-status">
+              <button class="aw-ms-btn" onclick="window.toggleAwDropdown('status')">All Statuses <span class="aw-ms-count" id="msd-status-count" hidden></span><span class="aw-ms-arrow">▾</span></button>
+              <div class="aw-ms-panel" id="msd-status-panel" hidden></div>
             </div>
+
+            <div class="aw-ms-wrap" id="msd-priority">
+              <button class="aw-ms-btn" onclick="window.toggleAwDropdown('priority')">All Priorities <span class="aw-ms-count" id="msd-priority-count" hidden></span><span class="aw-ms-arrow">▾</span></button>
+              <div class="aw-ms-panel" id="msd-priority-panel" hidden></div>
+            </div>
+
+            <div class="aw-ms-wrap" id="msd-assignee">
+              <button class="aw-ms-btn" onclick="window.toggleAwDropdown('assignee')">Assignee <span class="aw-ms-count" id="msd-assignee-count" hidden></span><span class="aw-ms-arrow">▾</span></button>
+              <div class="aw-ms-panel" id="msd-assignee-panel" hidden></div>
+            </div>
+
+            <div class="aw-ms-wrap" id="msd-sprint">
+              <button class="aw-ms-btn" onclick="window.toggleAwDropdown('sprint')">All Sprints <span class="aw-ms-count" id="msd-sprint-count" hidden></span><span class="aw-ms-arrow">▾</span></button>
+              <div class="aw-ms-panel" id="msd-sprint-panel" hidden></div>
+            </div>
+
+            <div class="aw-ms-wrap" id="msd-created">
+              <button class="aw-ms-btn" onclick="window.toggleAwDropdown('created')">Created <span class="aw-ms-count" id="msd-created-count" hidden></span><span class="aw-ms-arrow">▾</span></button>
+              <div class="aw-ms-panel aw-date-panel" id="msd-created-panel" hidden>
+                <div class="aw-date-range">
+                  <span class="aw-date-range-label">From</span>
+                  <input type="date" class="input input-sm" id="awCreatedFrom">
+                  <span class="aw-date-range-sep">–</span>
+                  <span class="aw-date-range-label">To</span>
+                  <input type="date" class="input input-sm" id="awCreatedTo">
+                </div>
+              </div>
+            </div>
+
+            <div class="aw-ms-wrap" id="msd-updated">
+              <button class="aw-ms-btn" onclick="window.toggleAwDropdown('updated')">Updated <span class="aw-ms-count" id="msd-updated-count" hidden></span><span class="aw-ms-arrow">▾</span></button>
+              <div class="aw-ms-panel aw-date-panel" id="msd-updated-panel" hidden>
+                <div class="aw-date-range">
+                  <span class="aw-date-range-label">From</span>
+                  <input type="date" class="input input-sm" id="awUpdatedFrom">
+                  <span class="aw-date-range-sep">–</span>
+                  <span class="aw-date-range-label">To</span>
+                  <input type="date" class="input input-sm" id="awUpdatedTo">
+                </div>
+              </div>
+            </div>
+
+            <div class="aw-ms-wrap" id="msd-duedate">
+              <button class="aw-ms-btn" onclick="window.toggleAwDropdown('duedate')">Due Date <span class="aw-ms-count" id="msd-duedate-count" hidden></span><span class="aw-ms-arrow">▾</span></button>
+              <div class="aw-ms-panel aw-date-panel" id="msd-duedate-panel" hidden>
+                <div class="aw-date-range">
+                  <span class="aw-date-range-label">From</span>
+                  <input type="date" class="input input-sm" id="awDueDateFrom">
+                  <span class="aw-date-range-sep">–</span>
+                  <span class="aw-date-range-label">To</span>
+                  <input type="date" class="input input-sm" id="awDueDateTo">
+                </div>
+              </div>
+            </div>
+
+            <div class="aw-ms-wrap" id="msd-startdate">
+              <button class="aw-ms-btn" onclick="window.toggleAwDropdown('startdate')">Start Date <span class="aw-ms-count" id="msd-startdate-count" hidden></span><span class="aw-ms-arrow">▾</span></button>
+              <div class="aw-ms-panel aw-date-panel" id="msd-startdate-panel" hidden>
+                <div class="aw-date-range">
+                  <span class="aw-date-range-label">From</span>
+                  <input type="date" class="input input-sm" id="awStartDateFrom">
+                  <span class="aw-date-range-sep">–</span>
+                  <span class="aw-date-range-label">To</span>
+                  <input type="date" class="input input-sm" id="awStartDateTo">
+                </div>
+              </div>
+            </div>
+
+            <button class="btn btn-outline btn-sm" id="awClearFilters" style="display:none" onclick="window._awClearFilters()">✕ Clear</button>
           </div>
+
           <div id="allWorkTable" class="table-container"></div>
         </div>
 
@@ -308,7 +441,7 @@
             <span id="drawerType" class="drawer-type-badge"></span>
           </div>
           <div class="drawer-topbar-right">
-            <button id="drawerSaveBtn" class="btn btn-primary btn-sm" style="display:none;margin-right:6px" onclick="saveDrawerChanges()">Save changes</button>
+            <span id="drawerSaveBtn" style="display:none"></span>
             <button class="btn-icon" id="drawerStarBtn" title="Star">☆</button>
             <button class="btn-icon" id="drawerActionsBtn" title="More actions">⋯</button>
             <button class="btn-icon drawer-close-btn" id="closeDrawer" onclick="closeDrawer()">✕</button>
@@ -389,7 +522,12 @@
                   <div id="drawerCommentAvatar" class="drawer-comment-avatar"></div>
                   <div class="drawer-comment-form">
                     <textarea id="drawerCommentInput" class="input" placeholder="Add a comment..." rows="2"></textarea>
+                    <div id="drawerCommentFileList" class="comment-file-list"></div>
                     <div class="drawer-comment-actions">
+                      <label class="btn btn-outline btn-sm comment-attach-btn" title="Attach file (max 500 MB)">
+                        📎 Attach
+                        <input type="file" id="drawerCommentAttach" multiple style="display:none">
+                      </label>
                       <button class="btn btn-primary btn-sm" id="drawerCommentSubmit">Comment</button>
                     </div>
                   </div>
@@ -631,8 +769,8 @@
             <label class="attachment-upload-label" id="attachmentUploadLabel">
               <input type="file" id="issueAttachments" multiple style="display:none">
               <span class="attachment-upload-btn">📎 Choose Files</span>
-              <span id="attachmentFileNames" style="font-size:12px;color:var(--text3);margin-left:8px">No files chosen</span>
             </label>
+            <div id="attachmentFileList" style="margin-top:6px;display:flex;flex-direction:column;gap:4px"></div>
           </div>
         </form>
       </div>

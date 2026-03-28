@@ -1065,7 +1065,7 @@ function _wlrRender() {
     return;
   }
   if (_wlrGroup === 'timesheet') {
-    content.innerHTML = _wlrPivotTable(rows);
+    content.innerHTML = _wlrTimesheetTable(rows);
     return;
   }
   if (_wlrGroup === 'none') {
@@ -1181,14 +1181,23 @@ var WLR_PIVOT_FIELDS = [
   { key: 'issue_title', label: 'Issue Title',        type: 'dimension' },
   { key: 'work_date',   label: 'Date',               type: 'dimension' },
   { key: 'is_billable', label: 'Billable',           type: 'dimension' },
-  { key: 'time_spent',  label: 'Time Spent (hours)', type: 'measure'   }
+  { key: 'time_spent',  label: 'Time Spent (hours)', type: 'measure'   },
+  { key: 'count',       label: 'Count of Worklogs',  type: 'measure'   }
 ];
 
 var _wlrPivotConfig = {
   rows:    ['user_name', 'issue_key'],
   cols:    ['work_date'],
-  values:  ['time_spent'],
+  values:  ['time_spent', 'count'],
   filters: []
+};
+
+// Metric shown in pivot cells: 'time' | 'count' | 'both'
+var _wlrPivotMetric = 'both';
+
+window._wlrSetMetric = function(m) {
+  _wlrPivotMetric = m;
+  var c = $('wlrContent'); if (c) c.innerHTML = _wlrDynamicPivot(_wlrData);
 };
 
 function _wlrGetFieldVal(row, key) {
@@ -1316,12 +1325,20 @@ function _wlrDynamicPivot(data) {
     colValues = ['—'];
   }
 
-  // Aggregation: sum time_spent for a subset filtered by one column value
-  function agg(rows, colVal) {
-    var subset = (colField && colVal !== '—')
-      ? rows.filter(function(r){ return _wlrGetFieldVal(r, colField) === colVal; })
-      : rows;
-    return subset.reduce(function(s, r){ return s + (r.time_spent || 0); }, 0);
+  // Aggregation based on active metric
+  function subset(rows, colVal) {
+    return (colField && colVal !== '—') ? rows.filter(function(r){ return _wlrGetFieldVal(r, colField) === colVal; }) : rows;
+  }
+  function aggTime(rows, colVal) { return subset(rows, colVal).reduce(function(s,r){ return s+(r.time_spent||0); }, 0); }
+  function aggCount(rows, colVal) { return subset(rows, colVal).length; }
+  function agg(rows, colVal) { return _wlrPivotMetric === 'count' ? aggCount(rows,colVal) : aggTime(rows,colVal); }
+  function fmtCell(rows, colVal) {
+    var t = aggTime(rows, colVal), n = aggCount(rows, colVal);
+    if (_wlrPivotMetric === 'time')  return t ? _wlrFmt(t)  : null;
+    if (_wlrPivotMetric === 'count') return n ? String(n)   : null;
+    // both
+    if (!t && !n) return null;
+    return (t ? _wlrFmt(t) : '0h') + '<br><span style="font-size:10px;opacity:.75">' + n + ' log' + (n!==1?'s':'') + '</span>';
   }
 
   // Build row tree recursively
@@ -1353,6 +1370,15 @@ function _wlrDynamicPivot(data) {
   if (tree) scanMax(tree);
   else colValues.forEach(function(c){ var v = agg(data, c); if (v > maxCell) maxCell = v; });
 
+  // ── Metric toggle bar ──
+  var valLabel = _wlrPivotMetric === 'time' ? 'Sum of Time' : _wlrPivotMetric === 'count' ? 'Count of Logs' : 'Time + Count';
+  var metricBar = '<div class="wlr-pivot-metric-bar">' +
+    '<span class="wlr-pm-label">Values:</span>' +
+    '<button class="wlr-pm-btn' + (_wlrPivotMetric==='time'?' active':'') + '" onclick="window._wlrSetMetric(\'time\')">⏱ Sum of Time</button>' +
+    '<button class="wlr-pm-btn' + (_wlrPivotMetric==='count'?' active':'') + '" onclick="window._wlrSetMetric(\'count\')">🔢 Count of Logs</button>' +
+    '<button class="wlr-pm-btn' + (_wlrPivotMetric==='both'?' active':'') + '" onclick="window._wlrSetMetric(\'both\')">⊞ Both</button>' +
+  '</div>';
+
   // Column label formatter
   function colLabel(val) {
     if (!colField || colField !== 'work_date' || val === '—') return esc(val);
@@ -1363,7 +1389,7 @@ function _wlrDynamicPivot(data) {
   }
 
   var rowDepth = rowFields.length || 1;
-  var html = '<div class="wlr-pivot-wrap"><table class="wlr-pivot-table"><thead><tr>';
+  var html = metricBar + '<div class="wlr-pivot-wrap"><table class="wlr-pivot-table"><thead><tr>';
 
   // Row-field column headers
   if (rowFields.length) {
@@ -1401,10 +1427,15 @@ function _wlrDynamicPivot(data) {
               (span > 1 ? ' colspan="' + span + '"' : '') + '>' + lbl + '</td>';
       colValues.forEach(function(c) {
         var v = agg(node.rows, c);
-        html += '<td class="wlr-pivot-td wlr-pivot-cell" style="' + _wlrHeatColor(v, maxCell) + '">' +
-                (v ? _wlrFmt(v) : '<span class="wlr-pivot-empty">—</span>') + '</td>';
+        var disp = fmtCell(node.rows, c);
+        html += '<td class="wlr-pivot-td wlr-pivot-cell' + (_wlrPivotMetric==='both'?' wlr-pivot-cell-both':'') + '" style="' + _wlrHeatColor(v, maxCell) + '">' +
+                (disp ? disp : '<span class="wlr-pivot-empty">—</span>') + '</td>';
       });
-      html += '<td class="wlr-pivot-td wlr-pivot-total-cell">' + _wlrFmt(rowTotal) + '</td></tr>';
+      // Row total
+      var rtDisp = _wlrPivotMetric==='count' ? String(node.rows.length)
+                 : _wlrPivotMetric==='time'  ? _wlrFmt(rowTotal)
+                 : _wlrFmt(rowTotal) + '<br><span style="font-size:10px;opacity:.75">' + node.rows.length + ' logs</span>';
+      html += '<td class="wlr-pivot-td wlr-pivot-total-cell' + (_wlrPivotMetric==='both'?' wlr-pivot-cell-both':'') + '">' + rtDisp + '</td></tr>';
       if (node.children) renderTree(node.children, depth + 1);
     });
   }
@@ -1412,9 +1443,12 @@ function _wlrDynamicPivot(data) {
     renderTree(tree, 0);
   } else {
     html += '<tr class="wlr-pivot-user-row"><td class="wlr-pivot-td wlr-pivot-label-col wlr-pivot-user-label">Grand Total</td>';
-    var gt = 0;
-    colValues.forEach(function(c){ var v = agg(data,c); gt+=v; html += '<td class="wlr-pivot-td wlr-pivot-cell" style="' + _wlrHeatColor(v, maxCell) + '">' + (v ? _wlrFmt(v) : '<span class="wlr-pivot-empty">—</span>') + '</td>'; });
-    html += '<td class="wlr-pivot-td wlr-pivot-total-cell">' + _wlrFmt(gt) + '</td></tr>';
+    colValues.forEach(function(c) {
+      var v = agg(data,c); var disp = fmtCell(data,c);
+      html += '<td class="wlr-pivot-td wlr-pivot-cell' + (_wlrPivotMetric==='both'?' wlr-pivot-cell-both':'') + '" style="' + _wlrHeatColor(v, maxCell) + '">' + (disp||'<span class="wlr-pivot-empty">—</span>') + '</td>';
+    });
+    var gtDisp = _wlrPivotMetric==='count' ? String(data.length) : _wlrPivotMetric==='time' ? _wlrFmt(data.reduce(function(s,r){return s+(r.time_spent||0);},0)) : _wlrFmt(data.reduce(function(s,r){return s+(r.time_spent||0);},0)) + '<br><span style="font-size:10px;opacity:.75">'+data.length+' logs</span>';
+    html += '<td class="wlr-pivot-td wlr-pivot-total-cell">' + gtDisp + '</td></tr>';
   }
 
   // Footer totals
@@ -1422,13 +1456,100 @@ function _wlrDynamicPivot(data) {
   html += '</tbody><tfoot><tr class="wlr-pivot-footer-row">';
   for (var i = 0; i < rowDepth; i++) html += '<td class="wlr-pivot-td wlr-pivot-label-col wlr-pivot-footer-label">' + (i===0?'TOTAL':'') + '</td>';
   colValues.forEach(function(c) {
-    var v = agg(data,c);
-    html += '<td class="wlr-pivot-td wlr-pivot-cell wlr-pivot-footer-cell">' + (v ? _wlrFmt(v) : '<span class="wlr-pivot-empty">—</span>') + '</td>';
+    var v = agg(data,c); var disp = fmtCell(data,c);
+    html += '<td class="wlr-pivot-td wlr-pivot-cell wlr-pivot-footer-cell' + (_wlrPivotMetric==='both'?' wlr-pivot-cell-both':'') + '">' + (disp||'<span class="wlr-pivot-empty">—</span>') + '</td>';
   });
-  html += '<td class="wlr-pivot-td wlr-pivot-total-cell wlr-pivot-grand-total">' + _wlrFmt(grandTotal) + '</td></tr></tfoot></table></div>';
+  var gtFootDisp = _wlrPivotMetric==='count' ? String(data.length) : _wlrPivotMetric==='time' ? _wlrFmt(grandTotal) : _wlrFmt(grandTotal)+'<br><span style="font-size:10px;opacity:.75">'+data.length+' logs</span>';
+  html += '<td class="wlr-pivot-td wlr-pivot-total-cell wlr-pivot-grand-total">' + gtFootDisp + '</td></tr></tfoot></table></div>';
   return html;
 }
 
+// ── Timesheet: flat Excel-style raw data table ────────────
+var _wlrSheetSort = { col: 'work_date', dir: 1 };
+
+window._wlrSheetSortBy = function(col) {
+  if (_wlrSheetSort.col === col) _wlrSheetSort.dir *= -1;
+  else { _wlrSheetSort.col = col; _wlrSheetSort.dir = 1; }
+  var c = $('wlrContent'); if (c) c.innerHTML = _wlrTimesheetTable(_wlrData);
+};
+
+function _wlrTimesheetTable(rows) {
+  if (!rows || !rows.length) return '<p class="text-muted placeholder-text">No work logs found for the selected filters.</p>';
+
+  var sorted = rows.slice().sort(function(a, b) {
+    var col = _wlrSheetSort.col, dir = _wlrSheetSort.dir;
+    var av = col === 'time_spent' ? (a.time_spent||0) : (col === 'is_billable' ? (a.is_billable?1:0)
+          : col === 'user_name' ? _wlrGetFieldVal(a,'user_name')
+          : col === 'space_name' ? _wlrGetFieldVal(a,'space_name')
+          : (a[col] || ''));
+    var bv = col === 'time_spent' ? (b.time_spent||0) : (col === 'is_billable' ? (b.is_billable?1:0)
+          : col === 'user_name' ? _wlrGetFieldVal(b,'user_name')
+          : col === 'space_name' ? _wlrGetFieldVal(b,'space_name')
+          : (b[col] || ''));
+    if (av < bv) return -dir; if (av > bv) return dir; return 0;
+  });
+
+  function sortTh(col, label) {
+    var arrow = _wlrSheetSort.col === col ? (_wlrSheetSort.dir > 0 ? ' ▲' : ' ▼') : ' ⇅';
+    return '<th class="wlr-sheet-th" onclick="window._wlrSheetSortBy(\'' + col + '\')" style="cursor:pointer">' + label + '<span style="color:var(--text3);font-size:10px">' + arrow + '</span></th>';
+  }
+
+  var totalMins = sorted.reduce(function(s,r){ return s+(r.time_spent||0); }, 0);
+  var totalCount = sorted.length;
+  var billableMins = sorted.filter(function(r){ return r.is_billable; }).reduce(function(s,r){ return s+(r.time_spent||0); }, 0);
+
+  var html = '<div class="wlr-sheet-summary">' +
+    '<span class="wlr-sheet-stat"><strong>' + totalCount + '</strong> entries</span>' +
+    '<span class="wlr-sheet-sep">·</span>' +
+    '<span class="wlr-sheet-stat">Total: <strong>' + _wlrFmt(totalMins) + '</strong> (' + (totalMins/60).toFixed(1) + 'h)</span>' +
+    '<span class="wlr-sheet-sep">·</span>' +
+    '<span class="wlr-sheet-stat">Billable: <strong>' + _wlrFmt(billableMins) + '</strong></span>' +
+  '</div>';
+
+  html += '<div class="wlr-sheet-wrap"><table class="wlr-sheet-table"><thead><tr>' +
+    '<th class="wlr-sheet-th wlr-sheet-num">#</th>' +
+    sortTh('work_date', 'Date') +
+    sortTh('user_name', 'User') +
+    sortTh('space_name', 'Space') +
+    sortTh('issue_key', 'Issue Key') +
+    '<th class="wlr-sheet-th">Issue Title</th>' +
+    sortTh('time_spent', 'Time (h)') +
+    '<th class="wlr-sheet-th">Time (m)</th>' +
+    '<th class="wlr-sheet-th">Description</th>' +
+    sortTh('is_billable', 'Billable') +
+    '</tr></thead><tbody>';
+
+  sorted.forEach(function(r, i) {
+    var u  = findUser(r.user_id);
+    var sp = getSpace(r.space_id);
+    var mins = r.time_spent || 0;
+    html += '<tr class="wlr-sheet-row">' +
+      '<td class="wlr-sheet-td wlr-sheet-num text-muted">' + (i+1) + '</td>' +
+      '<td class="wlr-sheet-td">' + esc(r.work_date ? r.work_date.slice(0,10) : '—') + '</td>' +
+      '<td class="wlr-sheet-td"><strong>' + esc(u ? u.name : (r.user_name||'—')) + '</strong></td>' +
+      '<td class="wlr-sheet-td text-muted">' + esc(sp ? sp.name : '—') + '</td>' +
+      '<td class="wlr-sheet-td"><span class="wlr-pivot-issue-key" style="cursor:pointer" onclick="openIssuePage(\'' + r.issue_id + '\')">' + esc(r.issue_key||'—') + '</span></td>' +
+      '<td class="wlr-sheet-td">' + esc(r.issue_title||'—') + '</td>' +
+      '<td class="wlr-sheet-td wlr-sheet-num" style="font-weight:600;color:var(--accent)">' + (mins/60).toFixed(2) + '</td>' +
+      '<td class="wlr-sheet-td wlr-sheet-num">' + mins + '</td>' +
+      '<td class="wlr-sheet-td text-muted">' + esc(r.description||'—') + '</td>' +
+      '<td class="wlr-sheet-td wlr-sheet-num">' + (r.is_billable ? '<span style="color:var(--success);font-weight:700">✓</span>' : '<span style="color:var(--text3)">—</span>') + '</td>' +
+    '</tr>';
+  });
+
+  // Totals row
+  html += '<tr class="wlr-sheet-total">' +
+    '<td colspan="6" style="text-align:right;font-weight:700;color:var(--text2)">TOTAL (' + totalCount + ' entries)</td>' +
+    '<td class="wlr-sheet-num" style="font-weight:700;color:var(--accent)">' + (totalMins/60).toFixed(2) + '</td>' +
+    '<td class="wlr-sheet-num" style="font-weight:700">' + totalMins + '</td>' +
+    '<td colspan="2"></td>' +
+  '</tr>';
+
+  html += '</tbody></table></div>';
+  return html;
+}
+
+// ── Old fixed Pivot (now unused - kept for reference) ─────
 function _wlrPivotTable(rows) {
   if (!rows || !rows.length) return '<p class="text-muted placeholder-text">No work logs found for the selected filters.</p>';
 

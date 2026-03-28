@@ -2321,6 +2321,28 @@ body.light .modal-dialog {
 .wlr-pivot-grand-total { font-size: 14px; color: var(--accent); }
 @media (max-width: 768px) { .wlr-pivot-label-col { min-width: 150px; max-width: 180px; } .wlr-pivot-issue-label { padding-left: 14px !important; } }
 
+/* ── Timesheet flat table ───────────────────────────────── */
+.wlr-sheet-summary { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 10px; flex-wrap: wrap; font-size: 13px; }
+.wlr-sheet-sep { color: var(--text3); }
+.wlr-sheet-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); }
+.wlr-sheet-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.wlr-sheet-th { background: var(--bg3); color: var(--text2); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: 8px 10px; border-bottom: 2px solid var(--border); white-space: nowrap; }
+.wlr-sheet-th:hover { background: color-mix(in srgb, var(--accent) 8%, var(--bg3)); }
+.wlr-sheet-num { text-align: center; }
+.wlr-sheet-td { padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: middle; white-space: nowrap; }
+.wlr-sheet-row:hover td { background: var(--bg3); }
+.wlr-sheet-row:nth-child(even) td { background: color-mix(in srgb, var(--bg3) 30%, transparent); }
+.wlr-sheet-row:nth-child(even):hover td { background: var(--bg3); }
+.wlr-sheet-total td { background: var(--bg3); border-top: 2px solid var(--border); }
+
+/* ── Pivot metric toggle bar ────────────────────────────── */
+.wlr-pivot-metric-bar { display: flex; align-items: center; gap: 8px; padding: 8px 0 12px; flex-wrap: wrap; }
+.wlr-pm-label { font-size: 12px; color: var(--text3); font-weight: 600; }
+.wlr-pm-btn { padding: 4px 12px; border: 1px solid var(--border); border-radius: 20px; background: var(--bg2); color: var(--text2); font-size: 12px; cursor: pointer; transition: all .15s; }
+.wlr-pm-btn:hover { border-color: var(--accent); color: var(--accent); }
+.wlr-pm-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.wlr-pivot-cell-both { vertical-align: middle; line-height: 1.3; padding: 4px 8px !important; }
+
 /* ── Pivot Field List Panel ─────────────────────────────── */
 .wlr-pp-overlay { position: absolute; top: 0; right: 0; bottom: 0; width: 100%; display: flex; justify-content: flex-end; z-index: 500; pointer-events: none; }
 .wlr-pp-dialog { pointer-events: all; width: 620px; max-width: 95vw; background: var(--bg1); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: -4px 0 24px rgba(0,0,0,.18); display: flex; flex-direction: column; height: fit-content; max-height: 90vh; margin: 12px 12px 12px 0; }

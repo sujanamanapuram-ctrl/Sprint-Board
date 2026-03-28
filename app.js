@@ -1476,6 +1476,17 @@ window._wlrSheetSortBy = function(col) {
 function _wlrTimesheetTable(rows) {
   if (!rows || !rows.length) return '<p class="text-muted placeholder-text">No work logs found for the selected filters.</p>';
 
+  // ── Section 1: User × Date matrix ──
+  var matrixSection = '<div class="wlr-ts-section-hdr"><span class="wlr-ts-section-title">📊 Summary Matrix — User × Date</span></div>' + _wlrPivotTable(rows);
+
+  // ── Section divider ──
+  var divider = '<div class="wlr-ts-divider">' +
+    '<span class="wlr-ts-divider-label">📋 All Log Entries</span>' +
+  '</div>';
+  var matrixHtml = matrixSection;
+
+  // ── Section 2: flat table follows below ──
+
   var sorted = rows.slice().sort(function(a, b) {
     var col = _wlrSheetSort.col, dir = _wlrSheetSort.dir;
     var av = col === 'time_spent' ? (a.time_spent||0) : (col === 'is_billable' ? (a.is_billable?1:0)
@@ -1546,10 +1557,10 @@ function _wlrTimesheetTable(rows) {
   '</tr>';
 
   html += '</tbody></table></div>';
-  return html;
+  return matrixHtml + divider + html;
 }
 
-// ── Old fixed Pivot (now unused - kept for reference) ─────
+// ── Old fixed Pivot (reused by Timesheet for matrix section) ──
 function _wlrPivotTable(rows) {
   if (!rows || !rows.length) return '<p class="text-muted placeholder-text">No work logs found for the selected filters.</p>';
 

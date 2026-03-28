@@ -2917,7 +2917,24 @@ function bindDrawerEdits(issue) {
   $('drawerPriority').onchange  = function () { autoSave('priority',     $('drawerPriority').value); };
   $('drawerAssignee').onchange  = function () { autoSave('assignee_id',  $('drawerAssignee').value || null); };
   $('drawerReporter').onchange  = function () { autoSave('reporter_id',  $('drawerReporter').value || null); };
-  $('drawerSprint').onchange    = function () { autoSave('sprint_id',    $('drawerSprint').value || null); };
+  $('drawerSprint').onchange = function () {
+    var sprintId = $('drawerSprint').value;
+    // Check if existing due date exceeds the newly selected sprint's end date
+    var dueVal = $('drawerDueDate').value;
+    if (sprintId && dueVal) {
+      var sprint = (S.data.sprints || []).find(function(sp){ return sp.id === sprintId; });
+      if (sprint && sprint.end_date) {
+        var sprintEnd = new Date(sprint.end_date.slice(0,10) + 'T00:00:00');
+        var duePicked = new Date(dueVal + 'T00:00:00');
+        if (duePicked > sprintEnd) {
+          toast('Due date (' + dueVal + ') exceeds sprint end date (' + sprint.end_date.slice(0,10) + '). Due date cleared.', 'error');
+          $('drawerDueDate').value = '';
+          autoSave('due_date', null);
+        }
+      }
+    }
+    autoSave('sprint_id', sprintId || null);
+  };
   $('drawerLabels').oninput     = function () { autoSave('labels',       $('drawerLabels').value); };
   $('drawerPoints').oninput     = function () {
     autoSave('story_points', $('drawerPoints').value ? parseInt($('drawerPoints').value, 10) : null);
@@ -2935,7 +2952,25 @@ function bindDrawerEdits(issue) {
     }
     autoSave('start_date', val || null);
   };
-  $('drawerDueDate').onchange   = function () { autoSave('due_date',     $('drawerDueDate').value || null); };
+  $('drawerDueDate').onchange = function () {
+    var val = $('drawerDueDate').value;
+    if (val) {
+      var sprintId = $('drawerSprint').value;
+      if (sprintId) {
+        var sprint = (S.data.sprints || []).find(function(sp){ return sp.id === sprintId; });
+        if (sprint && sprint.end_date) {
+          var sprintEnd = new Date(sprint.end_date.slice(0,10) + 'T00:00:00');
+          var picked    = new Date(val + 'T00:00:00');
+          if (picked > sprintEnd) {
+            toast('Due date cannot exceed sprint end date (' + sprint.end_date.slice(0,10) + ')', 'error');
+            $('drawerDueDate').value = '';
+            return;
+          }
+        }
+      }
+    }
+    autoSave('due_date', val || null);
+  };
 
   $('drawerTitle').oninput = function () {
     var title = $('drawerTitle').textContent.trim();
@@ -3761,6 +3796,23 @@ async function handleIssueSubmit(e) {
       toast('Start date cannot be in the past', 'error');
       $('issueStartDate').focus();
       return;
+    }
+  }
+  // Validate due date does not exceed sprint end date
+  var dueVal = $('issueDueDate').value;
+  if (dueVal) {
+    var sprintId = $('issueSprint').value;
+    if (sprintId) {
+      var sprint = (S.data.sprints || []).find(function(sp){ return sp.id === sprintId; });
+      if (sprint && sprint.end_date) {
+        var sprintEnd = new Date(sprint.end_date.slice(0,10) + 'T00:00:00');
+        var duePicked = new Date(dueVal + 'T00:00:00');
+        if (duePicked > sprintEnd) {
+          toast('Due date cannot exceed sprint end date (' + sprint.end_date.slice(0,10) + ')', 'error');
+          $('issueDueDate').focus();
+          return;
+        }
+      }
     }
   }
   var id = $('issueId').value;

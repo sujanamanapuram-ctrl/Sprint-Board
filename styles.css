@@ -2623,7 +2623,7 @@ body.light .user-footer-actions .btn-icon:hover { color: #fff; background: rgba(
 
 .aw-ms-panel {
   position: absolute; top: calc(100% + 4px); left: 0;
-  min-width: 190px; max-height: 280px; overflow-y: auto;
+  min-width: 200px; max-height: 280px; overflow-y: auto;
   background: var(--bg2); border: 1px solid var(--border);
   border-radius: var(--radius); box-shadow: 0 4px 20px rgba(0,0,0,.18);
   z-index: 9000; padding: 4px 0;
@@ -2633,10 +2633,10 @@ body.light .aw-ms-panel { box-shadow: 0 4px 20px rgba(0,0,0,.10); }
 .aw-ms-option {
   display: flex; align-items: center; gap: 8px;
   padding: 7px 12px; cursor: pointer; font-size: 13px;
-  user-select: none;
+  user-select: none; white-space: nowrap;
 }
 .aw-ms-option:hover { background: var(--bg3); }
-.aw-ms-option input[type="checkbox"] { cursor: pointer; accent-color: var(--accent); }
+.aw-ms-option input[type="checkbox"] { cursor: pointer; accent-color: var(--accent); flex-shrink: 0; width: 14px; height: 14px; }
 
 /* Date filter dropdown panel */
 .aw-date-panel { min-width: 290px !important; overflow: visible !important; max-height: none !important; }

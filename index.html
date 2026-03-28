@@ -248,13 +248,21 @@
             <div class="wlr-pp-dialog">
               <div class="wlr-pp-header">
                 <span class="wlr-pp-title">Field List</span>
-                <button class="btn-icon" onclick="window._wlrClosePivotPanel()" style="background:none;border:none;cursor:pointer;font-size:16px;color:var(--text3)">✕</button>
+                <div style="display:flex;align-items:center;gap:8px">
+                  <button class="btn btn-outline btn-sm" style="font-size:11px;padding:3px 8px" onclick="alert('Calculated fields coming soon!')">Calculated field</button>
+                  <button class="btn-icon" onclick="window._wlrClosePivotPanel()" style="background:none;border:none;cursor:pointer;font-size:16px;color:var(--text3)">✕</button>
+                </div>
               </div>
               <div class="wlr-pp-body">
                 <!-- Left: available fields -->
                 <div class="wlr-pp-left">
                   <div class="wlr-pp-left-hdr">
                     <span>All fields</span>
+                    <span style="display:flex;gap:4px;color:var(--text3);font-size:13px">
+                      <span title="Sort default" style="cursor:pointer" onclick="window._wlrSortFields('default')">↕</span>
+                      <span title="Sort A→Z" style="cursor:pointer" onclick="window._wlrSortFields('asc')">↑</span>
+                      <span title="Sort Z→A" style="cursor:pointer" onclick="window._wlrSortFields('desc')">↓</span>
+                    </span>
                   </div>
                   <div id="wlrPivotFieldList" class="wlr-pp-field-list"></div>
                 </div>

@@ -1174,7 +1174,7 @@ function _wlrHeatColor(mins, maxMins) {
 // ═══════════════════════════════════════════════════════════
 // DYNAMIC PIVOT (Jira Worklog Pro-style)
 // ═══════════════════════════════════════════════════════════
-var WLR_PIVOT_FIELDS = [
+var WLR_PIVOT_FIELDS_DEFAULT = [
   { key: 'user_name',   label: 'User',               type: 'dimension' },
   { key: 'space_name',  label: 'Space',              type: 'dimension' },
   { key: 'issue_key',   label: 'Issue Key',          type: 'dimension' },
@@ -1184,6 +1184,7 @@ var WLR_PIVOT_FIELDS = [
   { key: 'time_spent',  label: 'Time Spent (hours)', type: 'measure'   },
   { key: 'count',       label: 'Count of Worklogs',  type: 'measure'   }
 ];
+var WLR_PIVOT_FIELDS = WLR_PIVOT_FIELDS_DEFAULT.slice();
 
 var _wlrPivotConfig = {
   rows:    ['user_name', 'issue_key'],
@@ -1193,7 +1194,15 @@ var _wlrPivotConfig = {
 };
 
 // Metric shown in pivot cells: 'time' | 'count' | 'both'
-var _wlrPivotMetric = 'both';
+var _wlrPivotMetric = 'time';
+
+// Collapsed user-row nodes: set of nodeIds
+var _wlrCollapsed = {};
+
+window._wlrToggleCollapse = function(nodeId) {
+  _wlrCollapsed[nodeId] = !_wlrCollapsed[nodeId];
+  var c = $('wlrContent'); if (c) c.innerHTML = _wlrDynamicPivot(_wlrData);
+};
 
 window._wlrSetMetric = function(m) {
   _wlrPivotMetric = m;
@@ -1302,6 +1311,12 @@ window._wlrApplyPivot = function() {
   _wlrRenderPivotPanel();
   var c = $('wlrContent'); if (c) c.innerHTML = _wlrDynamicPivot(_wlrData);
 };
+window._wlrSortFields = function(order) {
+  if (order === 'asc')  WLR_PIVOT_FIELDS = WLR_PIVOT_FIELDS_DEFAULT.slice().sort(function(a,b){ return a.label.localeCompare(b.label); });
+  else if (order === 'desc') WLR_PIVOT_FIELDS = WLR_PIVOT_FIELDS_DEFAULT.slice().sort(function(a,b){ return b.label.localeCompare(a.label); });
+  else WLR_PIVOT_FIELDS = WLR_PIVOT_FIELDS_DEFAULT.slice();
+  _wlrRenderPivotPanel();
+};
 window._wlrOpenPivotPanel = function() {
   var p = $('wlrPivotPanel'); if (p) { p.removeAttribute('hidden'); _wlrRenderPivotPanel(); }
 };
@@ -1314,34 +1329,50 @@ function _wlrDynamicPivot(data) {
   if (!data || !data.length) return '<p class="text-muted placeholder-text">No work logs found for the selected filters.</p>';
   var rowFields = cfg.rows;
   var colField  = cfg.cols[0] || null;
+  var noColMode = !colField;  // flat tree mode — no date/column expansion
 
-  // Unique column values (sorted)
-  var colValues;
-  if (colField) {
+  // ── Column values (matrix mode) ──
+  var colValues = [];
+  if (!noColMode) {
     var colSet = {};
     data.forEach(function(r){ colSet[_wlrGetFieldVal(r, colField)] = true; });
     colValues = Object.keys(colSet).sort();
-  } else {
-    colValues = ['—'];
+    if (!colValues.length) colValues = [];
   }
 
-  // Aggregation based on active metric
+  // ── Aggregation helpers ──
   function subset(rows, colVal) {
-    return (colField && colVal !== '—') ? rows.filter(function(r){ return _wlrGetFieldVal(r, colField) === colVal; }) : rows;
+    if (noColMode || !colVal) return rows;
+    return rows.filter(function(r){ return _wlrGetFieldVal(r, colField) === colVal; });
   }
-  function aggTime(rows, colVal) { return subset(rows, colVal).reduce(function(s,r){ return s+(r.time_spent||0); }, 0); }
+  function aggTime(rows, colVal)  { return subset(rows, colVal).reduce(function(s,r){ return s+(r.time_spent||0); }, 0); }
   function aggCount(rows, colVal) { return subset(rows, colVal).length; }
-  function agg(rows, colVal) { return _wlrPivotMetric === 'count' ? aggCount(rows,colVal) : aggTime(rows,colVal); }
+  function agg(rows, colVal)      { return _wlrPivotMetric === 'count' ? aggCount(rows,colVal) : aggTime(rows,colVal); }
+
+  // Format cell value: flat-tree mode → decimal hours; matrix mode → Xh Ym with heat-map
   function fmtCell(rows, colVal) {
     var t = aggTime(rows, colVal), n = aggCount(rows, colVal);
-    if (_wlrPivotMetric === 'time')  return t ? _wlrFmt(t)  : null;
-    if (_wlrPivotMetric === 'count') return n ? String(n)   : null;
-    // both
+    if (noColMode) {
+      if (_wlrPivotMetric === 'count') return n ? String(n) : null;
+      if (_wlrPivotMetric === 'time')  return t ? (t/60).toFixed(2) : null;
+      if (!t && !n) return null;
+      return (t/60).toFixed(2) + '<br><span style="font-size:10px;opacity:.75">' + n + ' log' + (n!==1?'s':'') + '</span>';
+    }
+    if (_wlrPivotMetric === 'time')  return t ? _wlrFmt(t) : null;
+    if (_wlrPivotMetric === 'count') return n ? String(n) : null;
     if (!t && !n) return null;
     return (t ? _wlrFmt(t) : '0h') + '<br><span style="font-size:10px;opacity:.75">' + n + ' log' + (n!==1?'s':'') + '</span>';
   }
 
-  // Build row tree recursively
+  // Format row total (right-side Total col, matrix mode only)
+  function fmtRowTotal(rows) {
+    var t = rows.reduce(function(s,r){ return s+(r.time_spent||0); }, 0), n = rows.length;
+    if (_wlrPivotMetric === 'count') return String(n);
+    if (_wlrPivotMetric === 'time')  return _wlrFmt(t);
+    return _wlrFmt(t) + '<br><span style="font-size:10px;opacity:.75">' + n + ' logs</span>';
+  }
+
+  // ── Build row tree ──
   function buildTree(rows, fields) {
     if (!fields.length) return null;
     var key = fields[0], rest = fields.slice(1);
@@ -1358,109 +1389,157 @@ function _wlrDynamicPivot(data) {
   }
   var tree = rowFields.length ? buildTree(data, rowFields) : null;
 
-  // Max cell value for heat-map (across leaf nodes)
+  // ── Max cell for heat-map (matrix mode only) ──
   var maxCell = 0;
-  function scanMax(nodes) {
-    if (!nodes) return;
-    nodes.forEach(function(node) {
-      colValues.forEach(function(c){ var v = agg(node.rows, c); if (v > maxCell) maxCell = v; });
-      scanMax(node.children);
-    });
+  if (!noColMode) {
+    function scanMax(nodes) {
+      if (!nodes) return;
+      nodes.forEach(function(node) {
+        colValues.forEach(function(c){ var v = agg(node.rows, c); if (v > maxCell) maxCell = v; });
+        scanMax(node.children);
+      });
+    }
+    if (tree) scanMax(tree); else colValues.forEach(function(c){ var v = agg(data, c); if (v > maxCell) maxCell = v; });
   }
-  if (tree) scanMax(tree);
-  else colValues.forEach(function(c){ var v = agg(data, c); if (v > maxCell) maxCell = v; });
 
   // ── Metric toggle bar ──
-  var valLabel = _wlrPivotMetric === 'time' ? 'Sum of Time' : _wlrPivotMetric === 'count' ? 'Count of Logs' : 'Time + Count';
   var metricBar = '<div class="wlr-pivot-metric-bar">' +
     '<span class="wlr-pm-label">Values:</span>' +
-    '<button class="wlr-pm-btn' + (_wlrPivotMetric==='time'?' active':'') + '" onclick="window._wlrSetMetric(\'time\')">⏱ Sum of Time</button>' +
+    '<button class="wlr-pm-btn' + (_wlrPivotMetric==='time'?' active':'')  + '" onclick="window._wlrSetMetric(\'time\')">⏱ Sum of Time</button>' +
     '<button class="wlr-pm-btn' + (_wlrPivotMetric==='count'?' active':'') + '" onclick="window._wlrSetMetric(\'count\')">🔢 Count of Logs</button>' +
-    '<button class="wlr-pm-btn' + (_wlrPivotMetric==='both'?' active':'') + '" onclick="window._wlrSetMetric(\'both\')">⊞ Both</button>' +
+    '<button class="wlr-pm-btn' + (_wlrPivotMetric==='both'?' active':'')  + '" onclick="window._wlrSetMetric(\'both\')">⊞ Both</button>' +
   '</div>';
 
-  // Column label formatter
+  // ── Column label (date formatting) ──
   function colLabel(val) {
-    if (!colField || colField !== 'work_date' || val === '—') return esc(val);
+    if (!colField || colField !== 'work_date') return esc(val);
     var d = new Date(val + 'T00:00:00');
     if (isNaN(d.getTime())) return esc(val);
     var days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
     return days[d.getDay()] + ' ' + String(d.getDate()).padStart(2,'0') + '/' + String(d.getMonth()+1).padStart(2,'0');
   }
 
+  // ── Single value column header (flat-tree mode) ──
+  var singleColHdr = _wlrPivotMetric === 'count' ? 'Count of Worklogs'
+                   : _wlrPivotMetric === 'time'  ? 'Total Sum of Time (hours)'
+                   : 'Total';
+
   var rowDepth = rowFields.length || 1;
   var html = metricBar + '<div class="wlr-pivot-wrap"><table class="wlr-pivot-table"><thead><tr>';
 
-  // Row-field column headers
+  // Row-field header columns
   if (rowFields.length) {
-    rowFields.forEach(function(rk) {
+    rowFields.forEach(function(rk, idx) {
       var f = WLR_PIVOT_FIELDS.find(function(f){ return f.key === rk; });
       html += '<th class="wlr-pivot-th wlr-pivot-label-col">' + esc(f ? f.label : rk) + '</th>';
     });
   } else {
     html += '<th class="wlr-pivot-th wlr-pivot-label-col"> </th>';
   }
-  colValues.forEach(function(c){ html += '<th class="wlr-pivot-th wlr-pivot-date-col">' + colLabel(c) + '</th>'; });
-  html += '<th class="wlr-pivot-th wlr-pivot-total-col">Total</th></tr></thead><tbody>';
 
-  // Render tree
+  if (noColMode) {
+    html += '<th class="wlr-pivot-th wlr-pivot-total-col" style="text-align:right">' + esc(singleColHdr) + '</th>';
+  } else {
+    colValues.forEach(function(c){ html += '<th class="wlr-pivot-th wlr-pivot-date-col">' + colLabel(c) + '</th>'; });
+    html += '<th class="wlr-pivot-th wlr-pivot-total-col">Total</th>';
+  }
+  html += '</tr></thead><tbody>';
+
+  // ── Render tree rows ──
   function renderTree(nodes, depth) {
     nodes.forEach(function(node) {
-      var rowTotal = node.rows.reduce(function(s,r){ return s+(r.time_spent||0); }, 0);
+      var nodeId = node.field + ':' + node.label;
+      var safeId = nodeId.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
       var isTop = depth === 0;
+      var hasChildren = !!(node.children && node.children.length);
+      var collapsed = !!_wlrCollapsed[nodeId];
+
       html += '<tr class="' + (isTop ? 'wlr-pivot-user-row' : 'wlr-pivot-issue-row') + '">';
-      // Indent spacer cells
-      for (var d = 0; d < depth; d++) {
-        html += '<td class="wlr-pivot-td wlr-pivot-label-col" style="background:var(--bg2);border-right:none;min-width:16px;padding:0"></td>';
+
+      // Indent spacer cells for child rows in matrix mode
+      if (!noColMode) {
+        for (var d = 0; d < depth; d++) {
+          html += '<td class="wlr-pivot-td wlr-pivot-label-col" style="background:var(--bg2);border-right:none;min-width:12px;padding:0"></td>';
+        }
       }
+
       // Label cell
-      var span = rowDepth - depth;
+      var span = noColMode ? 1 : (rowDepth - depth);
       var lbl;
       if (node.field === 'issue_key') {
         var ir = node.rows[0];
         lbl = '<span class="wlr-pivot-issue-key" onclick="openIssuePage(\'' + (ir ? ir.issue_id : '') + '\')">' + esc(node.label) + '</span>';
         if (ir && ir.issue_title) lbl += ' <span class="wlr-pivot-issue-title">' + esc(ir.issue_title) + '</span>';
+      } else if (noColMode && isTop && hasChildren) {
+        // Collapsible user row in flat mode
+        var arrow = collapsed ? '›' : '∨';
+        lbl = '<span class="wlr-pivot-collapse-btn" onclick="window._wlrToggleCollapse(\'' + safeId + '\')">' + arrow + '</span> ' + esc(node.label);
       } else {
-        lbl = esc(node.label);
+        lbl = (noColMode && !isTop ? '<span style="display:inline-block;width:16px"></span>' : '') + esc(node.label);
       }
+
       html += '<td class="wlr-pivot-td wlr-pivot-label-col ' + (isTop ? 'wlr-pivot-user-label' : 'wlr-pivot-issue-label') + '"' +
               (span > 1 ? ' colspan="' + span + '"' : '') + '>' + lbl + '</td>';
-      colValues.forEach(function(c) {
-        var v = agg(node.rows, c);
-        var disp = fmtCell(node.rows, c);
-        html += '<td class="wlr-pivot-td wlr-pivot-cell' + (_wlrPivotMetric==='both'?' wlr-pivot-cell-both':'') + '" style="' + _wlrHeatColor(v, maxCell) + '">' +
-                (disp ? disp : '<span class="wlr-pivot-empty">—</span>') + '</td>';
-      });
-      // Row total
-      var rtDisp = _wlrPivotMetric==='count' ? String(node.rows.length)
-                 : _wlrPivotMetric==='time'  ? _wlrFmt(rowTotal)
-                 : _wlrFmt(rowTotal) + '<br><span style="font-size:10px;opacity:.75">' + node.rows.length + ' logs</span>';
-      html += '<td class="wlr-pivot-td wlr-pivot-total-cell' + (_wlrPivotMetric==='both'?' wlr-pivot-cell-both':'') + '">' + rtDisp + '</td></tr>';
-      if (node.children) renderTree(node.children, depth + 1);
+
+      if (noColMode) {
+        // Single value cell
+        var disp = fmtCell(node.rows, null);
+        html += '<td class="wlr-pivot-td wlr-pivot-total-cell' + (_wlrPivotMetric==='both'?' wlr-pivot-cell-both':'') + '" style="text-align:right">' +
+                (disp || '<span class="wlr-pivot-empty">—</span>') + '</td>';
+      } else {
+        // Per-column cells + row total
+        colValues.forEach(function(c) {
+          var v = agg(node.rows, c);
+          var disp = fmtCell(node.rows, c);
+          html += '<td class="wlr-pivot-td wlr-pivot-cell' + (_wlrPivotMetric==='both'?' wlr-pivot-cell-both':'') + '" style="' + _wlrHeatColor(v, maxCell) + '">' +
+                  (disp ? disp : '<span class="wlr-pivot-empty">—</span>') + '</td>';
+        });
+        html += '<td class="wlr-pivot-td wlr-pivot-total-cell' + (_wlrPivotMetric==='both'?' wlr-pivot-cell-both':'') + '">' + fmtRowTotal(node.rows) + '</td>';
+      }
+      html += '</tr>';
+
+      if (node.children && !(noColMode && collapsed)) renderTree(node.children, depth + 1);
     });
   }
+
   if (tree) {
     renderTree(tree, 0);
   } else {
-    html += '<tr class="wlr-pivot-user-row"><td class="wlr-pivot-td wlr-pivot-label-col wlr-pivot-user-label">Grand Total</td>';
-    colValues.forEach(function(c) {
-      var v = agg(data,c); var disp = fmtCell(data,c);
-      html += '<td class="wlr-pivot-td wlr-pivot-cell' + (_wlrPivotMetric==='both'?' wlr-pivot-cell-both':'') + '" style="' + _wlrHeatColor(v, maxCell) + '">' + (disp||'<span class="wlr-pivot-empty">—</span>') + '</td>';
-    });
-    var gtDisp = _wlrPivotMetric==='count' ? String(data.length) : _wlrPivotMetric==='time' ? _wlrFmt(data.reduce(function(s,r){return s+(r.time_spent||0);},0)) : _wlrFmt(data.reduce(function(s,r){return s+(r.time_spent||0);},0)) + '<br><span style="font-size:10px;opacity:.75">'+data.length+' logs</span>';
-    html += '<td class="wlr-pivot-td wlr-pivot-total-cell">' + gtDisp + '</td></tr>';
+    // No row fields configured — show grand total only
+    html += '<tr class="wlr-pivot-user-row"><td class="wlr-pivot-td wlr-pivot-label-col wlr-pivot-user-label"' +
+            (rowDepth > 1 ? ' colspan="' + rowDepth + '"' : '') + '>Grand Total</td>';
+    if (noColMode) {
+      var gtd = fmtCell(data, null);
+      html += '<td class="wlr-pivot-td wlr-pivot-total-cell" style="text-align:right">' + (gtd||'—') + '</td>';
+    } else {
+      colValues.forEach(function(c) {
+        var v = agg(data,c); var disp = fmtCell(data,c);
+        html += '<td class="wlr-pivot-td wlr-pivot-cell' + (_wlrPivotMetric==='both'?' wlr-pivot-cell-both':'') + '" style="' + _wlrHeatColor(v, maxCell) + '">' + (disp||'<span class="wlr-pivot-empty">—</span>') + '</td>';
+      });
+      html += '<td class="wlr-pivot-td wlr-pivot-total-cell">' + fmtRowTotal(data) + '</td>';
+    }
+    html += '</tr>';
   }
 
-  // Footer totals
+  // ── Grand total footer row ──
   var grandTotal = data.reduce(function(s,r){ return s+(r.time_spent||0); }, 0);
   html += '</tbody><tfoot><tr class="wlr-pivot-footer-row">';
-  for (var i = 0; i < rowDepth; i++) html += '<td class="wlr-pivot-td wlr-pivot-label-col wlr-pivot-footer-label">' + (i===0?'TOTAL':'') + '</td>';
-  colValues.forEach(function(c) {
-    var v = agg(data,c); var disp = fmtCell(data,c);
-    html += '<td class="wlr-pivot-td wlr-pivot-cell wlr-pivot-footer-cell' + (_wlrPivotMetric==='both'?' wlr-pivot-cell-both':'') + '">' + (disp||'<span class="wlr-pivot-empty">—</span>') + '</td>';
-  });
-  var gtFootDisp = _wlrPivotMetric==='count' ? String(data.length) : _wlrPivotMetric==='time' ? _wlrFmt(grandTotal) : _wlrFmt(grandTotal)+'<br><span style="font-size:10px;opacity:.75">'+data.length+' logs</span>';
-  html += '<td class="wlr-pivot-td wlr-pivot-total-cell wlr-pivot-grand-total">' + gtFootDisp + '</td></tr></tfoot></table></div>';
+  for (var i = 0; i < rowDepth; i++) {
+    html += '<td class="wlr-pivot-td wlr-pivot-label-col wlr-pivot-footer-label">' + (i===0 ? 'Grand total' : '') + '</td>';
+  }
+  if (noColMode) {
+    var gtf = fmtCell(data, null);
+    html += '<td class="wlr-pivot-td wlr-pivot-total-cell wlr-pivot-grand-total" style="text-align:right">' + (gtf||'—') + '</td>';
+  } else {
+    colValues.forEach(function(c) {
+      var v = agg(data,c); var disp = fmtCell(data,c);
+      html += '<td class="wlr-pivot-td wlr-pivot-cell wlr-pivot-footer-cell' + (_wlrPivotMetric==='both'?' wlr-pivot-cell-both':'') + '">' + (disp||'<span class="wlr-pivot-empty">—</span>') + '</td>';
+    });
+    var gtFootDisp = _wlrPivotMetric==='count' ? String(data.length) : _wlrPivotMetric==='time' ? _wlrFmt(grandTotal)
+      : _wlrFmt(grandTotal) + '<br><span style="font-size:10px;opacity:.75">' + data.length + ' logs</span>';
+    html += '<td class="wlr-pivot-td wlr-pivot-total-cell wlr-pivot-grand-total">' + gtFootDisp + '</td>';
+  }
+  html += '</tr></tfoot></table></div>';
   return html;
 }
 

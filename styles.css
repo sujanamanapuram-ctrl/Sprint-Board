@@ -2357,7 +2357,9 @@ body.light .modal-dialog {
 .wlr-pp-title { font-weight: 700; font-size: 14px; }
 .wlr-pp-body { display: flex; flex: 1; overflow: hidden; min-height: 320px; }
 .wlr-pp-left { width: 220px; min-width: 180px; border-right: 1px solid var(--border); display: flex; flex-direction: column; }
-.wlr-pp-left-hdr { padding: 8px 12px; font-size: 11px; font-weight: 700; color: var(--text3); text-transform: uppercase; letter-spacing: .04em; border-bottom: 1px solid var(--border); background: var(--bg3); }
+.wlr-pp-left-hdr { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; font-size: 11px; font-weight: 700; color: var(--text3); text-transform: uppercase; letter-spacing: .04em; border-bottom: 1px solid var(--border); background: var(--bg3); }
+.wlr-pivot-collapse-btn { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; cursor: pointer; color: var(--accent); font-size: 12px; font-weight: 700; border-radius: 3px; margin-right: 4px; user-select: none; }
+.wlr-pivot-collapse-btn:hover { background: var(--accent-bg); }
 .wlr-pp-field-list { overflow-y: auto; flex: 1; padding: 4px 0; }
 .wlr-pp-field-item { display: flex; align-items: center; gap: 8px; padding: 7px 12px; cursor: grab; font-size: 13px; transition: background .12s; }
 .wlr-pp-field-item:hover { background: var(--bg3); }

@@ -3792,7 +3792,7 @@ async function handleIssueSubmit(e) {
     } else {
       renderCurrentView();
     }
-    if (created && created.id) {
+    if (created && created.id && !parentId) {
       toast('Issue created — opening in new tab…');
       setTimeout(function() { openIssuePage(created.id); }, 300);
     } else {

@@ -1367,6 +1367,13 @@ function renderBacklog() {
       '<span class="lane-toggle">' + (collapsed ? '\u25B8' : '\u25BE') + '</span>' +
       '<strong>' + esc(sp.name) + '</strong> ' +
       sprintStatusBadge(sp.status) +
+      (sp.start_date || sp.end_date
+        ? ' <span class="sprint-dates">📅 ' +
+          (sp.start_date ? fmtDateShort(sp.start_date) : '?') +
+          ' — ' +
+          (sp.end_date ? fmtDateShort(sp.end_date) : '?') +
+          '</span>'
+        : '') +
       ' <span class="text-muted">' + sprintIssues.length + ' issues</span>' +
       ' <span class="text-muted">' + points + ' pts</span></div>' +
       '<div class="lane-header-actions">';

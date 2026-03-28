@@ -2294,6 +2294,31 @@ body.light .modal-dialog {
 .wlr-table { margin: 0; border-radius: 0; border: none; }
 .wlr-table thead th { background: var(--bg3); }
 @media (max-width: 900px) { .wlr-summary { grid-template-columns: repeat(2,1fr); } }
+
+/* ── Pivot Table ────────────────────────────────────────── */
+.wlr-pivot-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); }
+.wlr-pivot-table { width: max-content; min-width: 100%; border-collapse: collapse; font-size: 12px; }
+.wlr-pivot-table thead { position: sticky; top: 0; z-index: 2; }
+.wlr-pivot-th { background: var(--bg3); color: var(--text2); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: 8px 10px; border-bottom: 2px solid var(--border); white-space: nowrap; text-align: center; }
+.wlr-pivot-label-col { position: sticky; left: 0; z-index: 3; text-align: left !important; min-width: 220px; max-width: 300px; }
+.wlr-pivot-th.wlr-pivot-label-col { z-index: 4; }
+.wlr-pivot-date-col { min-width: 72px; }
+.wlr-pivot-total-col { min-width: 80px; background: var(--bg3); border-left: 2px solid var(--border); }
+.wlr-pivot-td { padding: 6px 10px; border-bottom: 1px solid var(--border); vertical-align: middle; text-align: center; white-space: nowrap; }
+.wlr-pivot-td.wlr-pivot-label-col { background: var(--bg2); text-align: left; border-right: 1px solid var(--border); }
+.wlr-pivot-empty { color: var(--text3); font-size: 11px; }
+.wlr-pivot-user-row .wlr-pivot-label-col { background: var(--bg3); }
+.wlr-pivot-user-row td { border-top: 2px solid var(--border); }
+.wlr-pivot-user-label { font-weight: 700; font-size: 13px; color: var(--text); }
+.wlr-pivot-issue-label { padding-left: 24px !important; }
+.wlr-pivot-issue-key { font-weight: 700; color: var(--accent); cursor: pointer; margin-right: 4px; font-size: 11px; }
+.wlr-pivot-issue-key:hover { text-decoration: underline; }
+.wlr-pivot-issue-title { color: var(--text2); font-size: 11px; }
+.wlr-pivot-total-cell { font-weight: 700; background: var(--bg3); border-left: 2px solid var(--border); color: var(--accent); }
+.wlr-pivot-footer-row td { border-top: 2px solid var(--border); background: var(--bg3); font-weight: 700; }
+.wlr-pivot-footer-label { color: var(--text2); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+.wlr-pivot-grand-total { font-size: 14px; color: var(--accent); }
+@media (max-width: 768px) { .wlr-pivot-label-col { min-width: 150px; max-width: 180px; } .wlr-pivot-issue-label { padding-left: 14px !important; } }
 .view-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; justify-content: space-between; }
 .toolbar-group { display: flex; align-items: center; gap: 8px; }
 .home-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 28px; }

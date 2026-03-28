@@ -1056,6 +1056,10 @@ function _wlrRender() {
   }
 
   // ── Grouped table ──
+  if (_wlrGroup === 'pivot') {
+    content.innerHTML = _wlrPivotTable(rows);
+    return;
+  }
   if (_wlrGroup === 'none') {
     content.innerHTML = _wlrFlatTable(rows);
     return;
@@ -1120,6 +1124,129 @@ function _wlrFlatTable(rows) {
     '</tr>';
   });
   html += '</tbody></table>';
+  return html;
+}
+
+// ── Pivot helpers ──────────────────────────────────────────
+function _wlrBucketDate(dateStr, mode) {
+  if (!dateStr) return '';
+  if (mode === 'day') return dateStr.slice(0, 10);
+  if (mode === 'month') return dateStr.slice(0, 7);
+  var d = new Date(dateStr + 'T00:00:00');
+  var day = d.getDay();
+  var diff = (day === 0) ? -6 : 1 - day;
+  d.setDate(d.getDate() + diff);
+  return d.toISOString().slice(0, 10);
+}
+
+function _wlrBucketLabel(bucket, mode) {
+  if (mode === 'day') {
+    var d = new Date(bucket + 'T00:00:00');
+    var days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+    return days[d.getDay()] + ' ' + String(d.getDate()).padStart(2,'0') + '/' + String(d.getMonth()+1).padStart(2,'0');
+  }
+  if (mode === 'month') {
+    var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    var parts = bucket.split('-');
+    return months[parseInt(parts[1],10)-1] + ' ' + parts[0];
+  }
+  var d2 = new Date(bucket + 'T00:00:00');
+  var end = new Date(d2); end.setDate(end.getDate() + 6);
+  return String(d2.getDate()).padStart(2,'0') + '/' + String(d2.getMonth()+1).padStart(2,'0')
+    + '–' + String(end.getDate()).padStart(2,'0') + '/' + String(end.getMonth()+1).padStart(2,'0');
+}
+
+function _wlrHeatColor(mins, maxMins) {
+  if (!mins || !maxMins) return '';
+  var ratio = Math.min(mins / maxMins, 1);
+  var opacity = 0.10 + ratio * 0.70;
+  return 'background:rgba(77,144,224,' + opacity.toFixed(2) + ');color:' + (ratio > 0.55 ? '#fff' : 'var(--text)') + ';';
+}
+
+function _wlrPivotTable(rows) {
+  if (!rows || !rows.length) return '<p class="text-muted placeholder-text">No work logs found for the selected filters.</p>';
+
+  var allDates = rows.map(function(r){ return r.work_date ? r.work_date.slice(0,10) : null; }).filter(Boolean).sort();
+  if (!allDates.length) return '<p class="text-muted placeholder-text">No work logs found for the selected filters.</p>';
+  var daySpan = Math.round((new Date(allDates[allDates.length-1]) - new Date(allDates[0])) / 86400000) + 1;
+  var mode = daySpan <= 31 ? 'day' : daySpan <= 210 ? 'week' : 'month';
+
+  var pivotData = {}, bucketSet = {};
+  rows.forEach(function(r) {
+    var uid = r.user_id;
+    var bucket = _wlrBucketDate(r.work_date || '', mode);
+    if (!bucket) return;
+    bucketSet[bucket] = true;
+    if (!pivotData[uid]) {
+      var u = findUser(uid);
+      pivotData[uid] = { userName: u ? u.name : (r.user_name || uid), totalMins: 0, byDate: {}, issues: {} };
+    }
+    var ud = pivotData[uid];
+    ud.totalMins += (r.time_spent || 0);
+    ud.byDate[bucket] = (ud.byDate[bucket] || 0) + (r.time_spent || 0);
+    var iid = r.issue_id;
+    if (!ud.issues[iid]) {
+      ud.issues[iid] = { issueKey: r.issue_key || '—', issueTitle: r.issue_title || '—', issueId: iid, totalMins: 0, byDate: {} };
+    }
+    var id = ud.issues[iid];
+    id.totalMins += (r.time_spent || 0);
+    id.byDate[bucket] = (id.byDate[bucket] || 0) + (r.time_spent || 0);
+  });
+
+  var buckets = Object.keys(bucketSet).sort();
+
+  var colTotals = {}, grandTotal = 0;
+  buckets.forEach(function(b){ colTotals[b] = 0; });
+  Object.keys(pivotData).forEach(function(uid) {
+    buckets.forEach(function(b){ colTotals[b] += (pivotData[uid].byDate[b] || 0); });
+    grandTotal += pivotData[uid].totalMins;
+  });
+
+  var maxCell = 0;
+  Object.keys(pivotData).forEach(function(uid) {
+    var ud = pivotData[uid];
+    buckets.forEach(function(b){ if ((ud.byDate[b]||0) > maxCell) maxCell = ud.byDate[b]||0; });
+    Object.keys(ud.issues).forEach(function(iid) {
+      buckets.forEach(function(b){ if ((ud.issues[iid].byDate[b]||0) > maxCell) maxCell = ud.issues[iid].byDate[b]||0; });
+    });
+  });
+
+  var userIds = Object.keys(pivotData).sort(function(a,b){ return pivotData[a].userName.localeCompare(pivotData[b].userName); });
+
+  var html = '<div class="wlr-pivot-wrap"><table class="wlr-pivot-table"><thead><tr>';
+  html += '<th class="wlr-pivot-th wlr-pivot-label-col">User / Issue</th>';
+  buckets.forEach(function(b){ html += '<th class="wlr-pivot-th wlr-pivot-date-col">' + esc(_wlrBucketLabel(b, mode)) + '</th>'; });
+  html += '<th class="wlr-pivot-th wlr-pivot-total-col">Total</th></tr></thead><tbody>';
+
+  userIds.forEach(function(uid) {
+    var ud = pivotData[uid];
+    html += '<tr class="wlr-pivot-user-row"><td class="wlr-pivot-td wlr-pivot-label-col wlr-pivot-user-label">' + esc(ud.userName) + '</td>';
+    buckets.forEach(function(b) {
+      var v = ud.byDate[b] || 0;
+      html += '<td class="wlr-pivot-td wlr-pivot-cell" style="' + _wlrHeatColor(v, maxCell) + '">' + (v ? _wlrFmt(v) : '<span class="wlr-pivot-empty">—</span>') + '</td>';
+    });
+    html += '<td class="wlr-pivot-td wlr-pivot-total-cell">' + _wlrFmt(ud.totalMins) + '</td></tr>';
+
+    Object.keys(ud.issues).sort(function(a,b){ return ud.issues[a].issueKey.localeCompare(ud.issues[b].issueKey); }).forEach(function(iid) {
+      var id = ud.issues[iid];
+      html += '<tr class="wlr-pivot-issue-row"><td class="wlr-pivot-td wlr-pivot-label-col wlr-pivot-issue-label">'
+        + '<span class="wlr-pivot-issue-key" onclick="openIssuePage(\'' + id.issueId + '\')">' + esc(id.issueKey) + '</span>'
+        + ' <span class="wlr-pivot-issue-title">' + esc(id.issueTitle) + '</span></td>';
+      buckets.forEach(function(b) {
+        var v = id.byDate[b] || 0;
+        html += '<td class="wlr-pivot-td wlr-pivot-cell" style="' + _wlrHeatColor(v, maxCell) + '">' + (v ? _wlrFmt(v) : '<span class="wlr-pivot-empty">—</span>') + '</td>';
+      });
+      html += '<td class="wlr-pivot-td wlr-pivot-total-cell">' + _wlrFmt(id.totalMins) + '</td></tr>';
+    });
+  });
+
+  html += '</tbody><tfoot><tr class="wlr-pivot-footer-row"><td class="wlr-pivot-td wlr-pivot-label-col wlr-pivot-footer-label">TOTAL</td>';
+  buckets.forEach(function(b) {
+    var v = colTotals[b] || 0;
+    html += '<td class="wlr-pivot-td wlr-pivot-cell wlr-pivot-footer-cell">' + (v ? _wlrFmt(v) : '<span class="wlr-pivot-empty">—</span>') + '</td>';
+  });
+  html += '<td class="wlr-pivot-td wlr-pivot-total-cell wlr-pivot-grand-total">' + _wlrFmt(grandTotal) + '</td></tr></tfoot></table></div>';
+
   return html;
 }
 

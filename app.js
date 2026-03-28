@@ -1055,8 +1055,16 @@ function _wlrRender() {
     return;
   }
 
+  // Show/hide Field List button
+  var flBtn = $('wlrFieldListBtn');
+  if (flBtn) { if (_wlrGroup === 'pivot') flBtn.removeAttribute('hidden'); else { flBtn.setAttribute('hidden',''); window._wlrClosePivotPanel(); } }
+
   // ── Grouped table ──
   if (_wlrGroup === 'pivot') {
+    content.innerHTML = _wlrDynamicPivot(rows);
+    return;
+  }
+  if (_wlrGroup === 'timesheet') {
     content.innerHTML = _wlrPivotTable(rows);
     return;
   }
@@ -1161,6 +1169,264 @@ function _wlrHeatColor(mins, maxMins) {
   var ratio = Math.min(mins / maxMins, 1);
   var opacity = 0.10 + ratio * 0.70;
   return 'background:rgba(77,144,224,' + opacity.toFixed(2) + ');color:' + (ratio > 0.55 ? '#fff' : 'var(--text)') + ';';
+}
+
+// ═══════════════════════════════════════════════════════════
+// DYNAMIC PIVOT (Jira Worklog Pro-style)
+// ═══════════════════════════════════════════════════════════
+var WLR_PIVOT_FIELDS = [
+  { key: 'user_name',   label: 'User',               type: 'dimension' },
+  { key: 'space_name',  label: 'Space',              type: 'dimension' },
+  { key: 'issue_key',   label: 'Issue Key',          type: 'dimension' },
+  { key: 'issue_title', label: 'Issue Title',        type: 'dimension' },
+  { key: 'work_date',   label: 'Date',               type: 'dimension' },
+  { key: 'is_billable', label: 'Billable',           type: 'dimension' },
+  { key: 'time_spent',  label: 'Time Spent (hours)', type: 'measure'   }
+];
+
+var _wlrPivotConfig = {
+  rows:    ['user_name', 'issue_key'],
+  cols:    ['work_date'],
+  values:  ['time_spent'],
+  filters: []
+};
+
+function _wlrGetFieldVal(row, key) {
+  if (key === 'user_name')   { var u = findUser(row.user_id); return u ? u.name : (row.user_name || '?'); }
+  if (key === 'space_name')  { var sp = getSpace(row.space_id); return sp ? sp.name : '—'; }
+  if (key === 'issue_key')   return row.issue_key   || '—';
+  if (key === 'issue_title') return row.issue_title || '—';
+  if (key === 'work_date')   return row.work_date   ? row.work_date.slice(0,10) : '—';
+  if (key === 'is_billable') return row.is_billable ? 'Billable' : 'Non-billable';
+  if (key === 'time_spent')  return row.time_spent  || 0;
+  return '—';
+}
+
+function _wlrRefreshZone(zone) {
+  var bodyId = { rows:'wlrZoneRowsBody', cols:'wlrZoneColsBody', values:'wlrZoneValuesBody', filters:'wlrZoneFiltersBody' }[zone];
+  var el = $(bodyId);
+  if (!el) return;
+  var items = _wlrPivotConfig[zone];
+  if (!items || !items.length) {
+    el.innerHTML = '<div class="wlr-zone-placeholder">Drop ' + zone + ' here</div>';
+    return;
+  }
+  el.innerHTML = items.map(function(key) {
+    var f = WLR_PIVOT_FIELDS.find(function(f){ return f.key === key; });
+    var label = (zone === 'values' ? '≡ Σ ' : '') + (f ? f.label : key);
+    return '<div class="wlr-zone-chip" draggable="true" data-field="' + key + '" data-zone="' + zone + '"' +
+      ' ondragstart="window._wlrDragStart(event,\'' + key + '\')">' +
+      '<span class="wlr-zone-chip-label">' + esc(label) + '</span>' +
+      '<span class="wlr-zone-chip-arrow"> ▾</span>' +
+      '<span class="wlr-zone-chip-remove" onclick="window._wlrRemoveFromZone(\'' + zone + '\',\'' + key + '\')">×</span>' +
+    '</div>';
+  }).join('');
+}
+
+function _wlrRenderPivotPanel() {
+  var fl = $('wlrPivotFieldList');
+  if (!fl) return;
+  var allUsed = _wlrPivotConfig.rows.concat(_wlrPivotConfig.cols, _wlrPivotConfig.values, _wlrPivotConfig.filters);
+  fl.innerHTML = WLR_PIVOT_FIELDS.map(function(f) {
+    var used = allUsed.indexOf(f.key) >= 0;
+    return '<div class="wlr-pp-field-item" draggable="true" data-field="' + f.key + '" data-ftype="' + f.type + '"' +
+      ' ondragstart="window._wlrDragStart(event,\'' + f.key + '\')">' +
+      '<span class="wlr-pp-drag-handle">≡</span>' +
+      '<input type="checkbox"' + (used ? ' checked' : '') + ' onchange="window._wlrFieldCheck(\'' + f.key + '\',\'' + f.type + '\',this.checked)">' +
+      '<span class="wlr-pp-field-label' + (used ? ' wlr-pp-field-used' : '') + '">' + esc(f.label) + '</span>' +
+    '</div>';
+  }).join('');
+  ['rows','cols','values','filters'].forEach(function(z){ _wlrRefreshZone(z); });
+}
+
+var _wlrDragKey = null;
+window._wlrDragStart = function(e, key) {
+  _wlrDragKey = key;
+  e.dataTransfer.setData('text/plain', key);
+  e.dataTransfer.effectAllowed = 'move';
+};
+window._wlrDragOver = function(e) {
+  e.preventDefault();
+  e.currentTarget.classList.add('wlr-zone-dragover');
+};
+window._wlrDragLeave = function(e) {
+  e.currentTarget.classList.remove('wlr-zone-dragover');
+};
+window._wlrDrop = function(e, zone) {
+  e.preventDefault();
+  e.currentTarget.classList.remove('wlr-zone-dragover');
+  var key = e.dataTransfer.getData('text/plain') || _wlrDragKey;
+  if (!key) return;
+  var f = WLR_PIVOT_FIELDS.find(function(f){ return f.key === key; });
+  if (!f) return;
+  // Enforce: measures only go to values; dimensions don't go to values
+  if (zone === 'values' && f.type !== 'measure') zone = 'rows';
+  if (zone !== 'values' && f.type === 'measure') zone = 'values';
+  // Remove from all zones
+  ['rows','cols','values','filters'].forEach(function(z) {
+    _wlrPivotConfig[z] = _wlrPivotConfig[z].filter(function(k){ return k !== key; });
+  });
+  if (_wlrPivotConfig[zone].indexOf(key) < 0) _wlrPivotConfig[zone].push(key);
+  var defer = $('wlrDeferUpdate') && $('wlrDeferUpdate').checked;
+  if (!defer) { _wlrRenderPivotPanel(); var c = $('wlrContent'); if (c) c.innerHTML = _wlrDynamicPivot(_wlrData); }
+  else _wlrRenderPivotPanel();
+};
+window._wlrRemoveFromZone = function(zone, key) {
+  _wlrPivotConfig[zone] = _wlrPivotConfig[zone].filter(function(k){ return k !== key; });
+  var defer = $('wlrDeferUpdate') && $('wlrDeferUpdate').checked;
+  if (!defer) { _wlrRenderPivotPanel(); var c = $('wlrContent'); if (c) c.innerHTML = _wlrDynamicPivot(_wlrData); }
+  else _wlrRenderPivotPanel();
+};
+window._wlrFieldCheck = function(key, ftype, checked) {
+  ['rows','cols','values','filters'].forEach(function(z) {
+    _wlrPivotConfig[z] = _wlrPivotConfig[z].filter(function(k){ return k !== key; });
+  });
+  if (checked) {
+    var zone = ftype === 'measure' ? 'values' : 'rows';
+    if (_wlrPivotConfig[zone].indexOf(key) < 0) _wlrPivotConfig[zone].push(key);
+  }
+  var defer = $('wlrDeferUpdate') && $('wlrDeferUpdate').checked;
+  if (!defer) { _wlrRenderPivotPanel(); var c = $('wlrContent'); if (c) c.innerHTML = _wlrDynamicPivot(_wlrData); }
+  else _wlrRenderPivotPanel();
+};
+window._wlrApplyPivot = function() {
+  _wlrRenderPivotPanel();
+  var c = $('wlrContent'); if (c) c.innerHTML = _wlrDynamicPivot(_wlrData);
+};
+window._wlrOpenPivotPanel = function() {
+  var p = $('wlrPivotPanel'); if (p) { p.removeAttribute('hidden'); _wlrRenderPivotPanel(); }
+};
+window._wlrClosePivotPanel = function() {
+  var p = $('wlrPivotPanel'); if (p) p.setAttribute('hidden', '');
+};
+
+function _wlrDynamicPivot(data) {
+  var cfg = _wlrPivotConfig;
+  if (!data || !data.length) return '<p class="text-muted placeholder-text">No work logs found for the selected filters.</p>';
+  var rowFields = cfg.rows;
+  var colField  = cfg.cols[0] || null;
+
+  // Unique column values (sorted)
+  var colValues;
+  if (colField) {
+    var colSet = {};
+    data.forEach(function(r){ colSet[_wlrGetFieldVal(r, colField)] = true; });
+    colValues = Object.keys(colSet).sort();
+  } else {
+    colValues = ['—'];
+  }
+
+  // Aggregation: sum time_spent for a subset filtered by one column value
+  function agg(rows, colVal) {
+    var subset = (colField && colVal !== '—')
+      ? rows.filter(function(r){ return _wlrGetFieldVal(r, colField) === colVal; })
+      : rows;
+    return subset.reduce(function(s, r){ return s + (r.time_spent || 0); }, 0);
+  }
+
+  // Build row tree recursively
+  function buildTree(rows, fields) {
+    if (!fields.length) return null;
+    var key = fields[0], rest = fields.slice(1);
+    var groupMap = {}, order = [];
+    rows.forEach(function(r) {
+      var v = _wlrGetFieldVal(r, key);
+      if (!groupMap[v]) { groupMap[v] = []; order.push(v); }
+      groupMap[v].push(r);
+    });
+    order.sort();
+    return order.map(function(v) {
+      return { label: v, field: key, rows: groupMap[v], children: rest.length ? buildTree(groupMap[v], rest) : null };
+    });
+  }
+  var tree = rowFields.length ? buildTree(data, rowFields) : null;
+
+  // Max cell value for heat-map (across leaf nodes)
+  var maxCell = 0;
+  function scanMax(nodes) {
+    if (!nodes) return;
+    nodes.forEach(function(node) {
+      colValues.forEach(function(c){ var v = agg(node.rows, c); if (v > maxCell) maxCell = v; });
+      scanMax(node.children);
+    });
+  }
+  if (tree) scanMax(tree);
+  else colValues.forEach(function(c){ var v = agg(data, c); if (v > maxCell) maxCell = v; });
+
+  // Column label formatter
+  function colLabel(val) {
+    if (!colField || colField !== 'work_date' || val === '—') return esc(val);
+    var d = new Date(val + 'T00:00:00');
+    if (isNaN(d.getTime())) return esc(val);
+    var days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+    return days[d.getDay()] + ' ' + String(d.getDate()).padStart(2,'0') + '/' + String(d.getMonth()+1).padStart(2,'0');
+  }
+
+  var rowDepth = rowFields.length || 1;
+  var html = '<div class="wlr-pivot-wrap"><table class="wlr-pivot-table"><thead><tr>';
+
+  // Row-field column headers
+  if (rowFields.length) {
+    rowFields.forEach(function(rk) {
+      var f = WLR_PIVOT_FIELDS.find(function(f){ return f.key === rk; });
+      html += '<th class="wlr-pivot-th wlr-pivot-label-col">' + esc(f ? f.label : rk) + '</th>';
+    });
+  } else {
+    html += '<th class="wlr-pivot-th wlr-pivot-label-col"> </th>';
+  }
+  colValues.forEach(function(c){ html += '<th class="wlr-pivot-th wlr-pivot-date-col">' + colLabel(c) + '</th>'; });
+  html += '<th class="wlr-pivot-th wlr-pivot-total-col">Total</th></tr></thead><tbody>';
+
+  // Render tree
+  function renderTree(nodes, depth) {
+    nodes.forEach(function(node) {
+      var rowTotal = node.rows.reduce(function(s,r){ return s+(r.time_spent||0); }, 0);
+      var isTop = depth === 0;
+      html += '<tr class="' + (isTop ? 'wlr-pivot-user-row' : 'wlr-pivot-issue-row') + '">';
+      // Indent spacer cells
+      for (var d = 0; d < depth; d++) {
+        html += '<td class="wlr-pivot-td wlr-pivot-label-col" style="background:var(--bg2);border-right:none;min-width:16px;padding:0"></td>';
+      }
+      // Label cell
+      var span = rowDepth - depth;
+      var lbl;
+      if (node.field === 'issue_key') {
+        var ir = node.rows[0];
+        lbl = '<span class="wlr-pivot-issue-key" onclick="openIssuePage(\'' + (ir ? ir.issue_id : '') + '\')">' + esc(node.label) + '</span>';
+        if (ir && ir.issue_title) lbl += ' <span class="wlr-pivot-issue-title">' + esc(ir.issue_title) + '</span>';
+      } else {
+        lbl = esc(node.label);
+      }
+      html += '<td class="wlr-pivot-td wlr-pivot-label-col ' + (isTop ? 'wlr-pivot-user-label' : 'wlr-pivot-issue-label') + '"' +
+              (span > 1 ? ' colspan="' + span + '"' : '') + '>' + lbl + '</td>';
+      colValues.forEach(function(c) {
+        var v = agg(node.rows, c);
+        html += '<td class="wlr-pivot-td wlr-pivot-cell" style="' + _wlrHeatColor(v, maxCell) + '">' +
+                (v ? _wlrFmt(v) : '<span class="wlr-pivot-empty">—</span>') + '</td>';
+      });
+      html += '<td class="wlr-pivot-td wlr-pivot-total-cell">' + _wlrFmt(rowTotal) + '</td></tr>';
+      if (node.children) renderTree(node.children, depth + 1);
+    });
+  }
+  if (tree) {
+    renderTree(tree, 0);
+  } else {
+    html += '<tr class="wlr-pivot-user-row"><td class="wlr-pivot-td wlr-pivot-label-col wlr-pivot-user-label">Grand Total</td>';
+    var gt = 0;
+    colValues.forEach(function(c){ var v = agg(data,c); gt+=v; html += '<td class="wlr-pivot-td wlr-pivot-cell" style="' + _wlrHeatColor(v, maxCell) + '">' + (v ? _wlrFmt(v) : '<span class="wlr-pivot-empty">—</span>') + '</td>'; });
+    html += '<td class="wlr-pivot-td wlr-pivot-total-cell">' + _wlrFmt(gt) + '</td></tr>';
+  }
+
+  // Footer totals
+  var grandTotal = data.reduce(function(s,r){ return s+(r.time_spent||0); }, 0);
+  html += '</tbody><tfoot><tr class="wlr-pivot-footer-row">';
+  for (var i = 0; i < rowDepth; i++) html += '<td class="wlr-pivot-td wlr-pivot-label-col wlr-pivot-footer-label">' + (i===0?'TOTAL':'') + '</td>';
+  colValues.forEach(function(c) {
+    var v = agg(data,c);
+    html += '<td class="wlr-pivot-td wlr-pivot-cell wlr-pivot-footer-cell">' + (v ? _wlrFmt(v) : '<span class="wlr-pivot-empty">—</span>') + '</td>';
+  });
+  html += '<td class="wlr-pivot-td wlr-pivot-total-cell wlr-pivot-grand-total">' + _wlrFmt(grandTotal) + '</td></tr></tfoot></table></div>';
+  return html;
 }
 
 function _wlrPivotTable(rows) {

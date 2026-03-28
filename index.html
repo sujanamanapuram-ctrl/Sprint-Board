@@ -180,7 +180,10 @@
         <div class="view" id="view-worklog-report" hidden>
           <div class="wlr-header">
             <h1 class="view-title" style="margin:0">Work Log</h1>
-            <button class="btn btn-primary btn-sm" onclick="window._wlrExportCSV()">⬇ Export CSV</button>
+            <div style="display:flex;gap:8px;align-items:center">
+              <button class="btn btn-outline btn-sm" id="wlrFieldListBtn" onclick="window._wlrOpenPivotPanel()" hidden>⊞ Field List</button>
+              <button class="btn btn-primary btn-sm" onclick="window._wlrExportCSV()">⬇ Export CSV</button>
+            </div>
           </div>
 
           <!-- Filter bar -->
@@ -233,11 +236,57 @@
             <button class="wlr-gb-btn" data-wlr-group="space">🗂 Space</button>
             <button class="wlr-gb-btn" data-wlr-group="date">📅 Date</button>
             <button class="wlr-gb-btn" data-wlr-group="none">📋 All Entries</button>
+            <button class="wlr-gb-btn" data-wlr-group="timesheet">🗒️ Timesheet</button>
             <button class="wlr-gb-btn" data-wlr-group="pivot">⊞ Pivot</button>
           </div>
 
           <!-- Results -->
           <div id="wlrContent" class="wlr-content"></div>
+
+          <!-- Pivot Field List Panel (overlay) -->
+          <div id="wlrPivotPanel" class="wlr-pp-overlay" hidden>
+            <div class="wlr-pp-dialog">
+              <div class="wlr-pp-header">
+                <span class="wlr-pp-title">Field List</span>
+                <button class="btn-icon" onclick="window._wlrClosePivotPanel()" style="background:none;border:none;cursor:pointer;font-size:16px;color:var(--text3)">✕</button>
+              </div>
+              <div class="wlr-pp-body">
+                <!-- Left: available fields -->
+                <div class="wlr-pp-left">
+                  <div class="wlr-pp-left-hdr">
+                    <span>All fields</span>
+                  </div>
+                  <div id="wlrPivotFieldList" class="wlr-pp-field-list"></div>
+                </div>
+                <!-- Right: drop zones 2×2 grid -->
+                <div class="wlr-pp-zones">
+                  <div class="wlr-pp-zone" ondragover="window._wlrDragOver(event)" ondragleave="window._wlrDragLeave(event)" ondrop="window._wlrDrop(event,'filters')">
+                    <div class="wlr-pp-zone-hdr"><span>▽</span> Filters</div>
+                    <div class="wlr-pp-zone-body" id="wlrZoneFiltersBody"></div>
+                  </div>
+                  <div class="wlr-pp-zone" ondragover="window._wlrDragOver(event)" ondragleave="window._wlrDragLeave(event)" ondrop="window._wlrDrop(event,'cols')">
+                    <div class="wlr-pp-zone-hdr"><span>⊞</span> Columns</div>
+                    <div class="wlr-pp-zone-body" id="wlrZoneColsBody"></div>
+                  </div>
+                  <div class="wlr-pp-zone" ondragover="window._wlrDragOver(event)" ondragleave="window._wlrDragLeave(event)" ondrop="window._wlrDrop(event,'rows')">
+                    <div class="wlr-pp-zone-hdr"><span>☰</span> Rows</div>
+                    <div class="wlr-pp-zone-body" id="wlrZoneRowsBody"></div>
+                  </div>
+                  <div class="wlr-pp-zone" ondragover="window._wlrDragOver(event)" ondragleave="window._wlrDragLeave(event)" ondrop="window._wlrDrop(event,'values')">
+                    <div class="wlr-pp-zone-hdr"><span>Σ</span> Values</div>
+                    <div class="wlr-pp-zone-body" id="wlrZoneValuesBody"></div>
+                  </div>
+                </div>
+              </div>
+              <div class="wlr-pp-footer">
+                <label class="wlr-pp-defer"><input type="checkbox" id="wlrDeferUpdate"> Defer layout update</label>
+                <div style="display:flex;gap:8px">
+                  <button class="btn btn-primary btn-sm" onclick="window._wlrApplyPivot()">Apply</button>
+                  <button class="btn btn-secondary btn-sm" onclick="window._wlrClosePivotPanel()">Cancel</button>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
 
         <!-- Admin Settings View -->

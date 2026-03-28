@@ -2922,7 +2922,19 @@ function bindDrawerEdits(issue) {
   $('drawerPoints').oninput     = function () {
     autoSave('story_points', $('drawerPoints').value ? parseInt($('drawerPoints').value, 10) : null);
   };
-  $('drawerStartDate').onchange = function () { autoSave('start_date',   $('drawerStartDate').value || null); };
+  $('drawerStartDate').onchange = function () {
+    var val = $('drawerStartDate').value;
+    if (val) {
+      var today = new Date(); today.setHours(0,0,0,0);
+      var picked = new Date(val + 'T00:00:00');
+      if (picked < today) {
+        toast('Start date cannot be in the past', 'error');
+        $('drawerStartDate').value = '';
+        return;
+      }
+    }
+    autoSave('start_date', val || null);
+  };
   $('drawerDueDate').onchange   = function () { autoSave('due_date',     $('drawerDueDate').value || null); };
 
   $('drawerTitle').oninput = function () {
@@ -3740,6 +3752,17 @@ function populateIssueFormSelects() {
 
 async function handleIssueSubmit(e) {
   e.preventDefault();
+  // Validate start date is not in the past
+  var startVal = $('issueStartDate').value;
+  if (startVal) {
+    var today = new Date(); today.setHours(0,0,0,0);
+    var picked = new Date(startVal + 'T00:00:00');
+    if (picked < today) {
+      toast('Start date cannot be in the past', 'error');
+      $('issueStartDate').focus();
+      return;
+    }
+  }
   var id = $('issueId').value;
   var parentId = $('issueParentId').value || null;
   var payload = {
@@ -3753,7 +3776,7 @@ async function handleIssueSubmit(e) {
     story_points: $('issuePoints').value ? parseInt($('issuePoints').value, 10) : null,
     labels: $('issueLabels').value,
     start_date: $('issueStartDate').value || null,
-    due_date: $('issueDueDate').value || null,
+    due_date:   $('issueDueDate').value   || null,
     description: $('issueDescription').value,
     original_estimate: $('issueEstimate') ? parseEstimate($('issueEstimate').value) : 0,
     status: 'To Do'

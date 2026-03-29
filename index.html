@@ -53,6 +53,7 @@
           <a class="nav-item" data-view="yourwork"><span class="nav-icon">📋</span> Your Work</a>
           <a class="nav-item" data-view="global-reports"><span class="nav-icon">📊</span> Reports</a>
           <a class="nav-item" data-view="worklog-report"><span class="nav-icon">⏱️</span> Work Log</a>
+          <a class="nav-item" data-view="product-roadmap"><span class="nav-icon">🗺️</span> Product Roadmap</a>
         </div>
 
         <div class="sidebar-section">
@@ -295,6 +296,48 @@
               </div>
             </div>
           </div>
+        </div>
+
+        <!-- Product Roadmap View -->
+        <div class="view" id="view-product-roadmap" hidden>
+          <div class="prm-header">
+            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+              <h1 class="view-title" style="margin:0">🗺️ Product Roadmap</h1>
+              <div class="prm-view-toggle">
+                <button class="prm-vt-btn active" data-prm-view="timeline" onclick="window._prmSetView('timeline')">📅 Timeline</button>
+                <button class="prm-vt-btn" data-prm-view="list" onclick="window._prmSetView('list')">📋 List</button>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+              <select id="prmGroupBy" class="input input-sm" onchange="window._prmRender()">
+                <option value="space">Group by Space</option>
+                <option value="sprint">Group by Sprint</option>
+                <option value="priority">Group by Priority</option>
+                <option value="type">Group by Type</option>
+              </select>
+              <select id="prmZoom" class="input input-sm" onchange="window._prmRender()">
+                <option value="month">Monthly</option>
+                <option value="quarter">Quarterly</option>
+                <option value="week">Weekly</option>
+              </select>
+              <select id="prmFilterStatus" class="input input-sm" onchange="window._prmRender()">
+                <option value="">All Statuses</option>
+                <option value="To Do">To Do</option>
+                <option value="In Progress">In Progress</option>
+                <option value="In Review">In Review</option>
+                <option value="Done">Done</option>
+              </select>
+              <select id="prmFilterType" class="input input-sm" onchange="window._prmRender()">
+                <option value="">All Types</option>
+                <option value="epic">Epic</option>
+                <option value="story">Story</option>
+                <option value="task">Task</option>
+                <option value="bug">Bug</option>
+              </select>
+              <button class="btn btn-outline btn-sm" onclick="window._prmLoad()">↺ Refresh</button>
+            </div>
+          </div>
+          <div id="prmContent" class="prm-content"></div>
         </div>
 
         <!-- Admin Settings View -->

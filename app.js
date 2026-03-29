@@ -523,7 +523,7 @@ function navigateTo(view) {
   if (target) target.removeAttribute('hidden');
 
   // Breadcrumb
-  var label = view === 'yourwork' ? 'Your Work' : view === 'global-reports' ? 'Reports' : view === 'worklog-report' ? 'Work Log' : cap(view);
+  var label = view === 'yourwork' ? 'Your Work' : view === 'global-reports' ? 'Reports' : view === 'worklog-report' ? 'Work Log' : view === 'product-roadmap' ? 'Product Roadmap' : cap(view);
   updateBreadcrumb([{ label: label }]);
 
   // Active state
@@ -537,6 +537,7 @@ function navigateTo(view) {
   if (view === 'home') renderHome();
   else if (view === 'yourwork') renderYourWork();
   else if (view === 'worklog-report') renderWorklogReport();
+  else if (view === 'product-roadmap') renderProductRoadmap();
   else if (view === 'user-management') renderUserManagement();
   else if (view === 'settings') renderAdminSettings('org-general');
 }
@@ -997,6 +998,224 @@ function renderWorklogReport() {
   _wlrFetch();
 }
 
+// ═══════════════════════════════════════════════════════════
+//  PRODUCT ROADMAP
+// ═══════════════════════════════════════════════════════════
+var _prmView    = 'timeline';  // 'timeline' | 'list'
+var _prmData    = [];
+
+window._prmSetView = function(v) {
+  _prmView = v;
+  document.querySelectorAll('.prm-vt-btn').forEach(function(b){ b.classList.toggle('active', b.dataset.prmView === v); });
+  _prmRender();
+};
+
+async function renderProductRoadmap() {
+  var content = $('prmContent');
+  if (content) content.innerHTML = '<p class="text-muted" style="padding:24px">Loading…</p>';
+  await _prmLoad();
+}
+
+window._prmLoad = async function() {
+  var content = $('prmContent');
+  if (content) content.innerHTML = '<p class="text-muted" style="padding:24px">Loading…</p>';
+  try {
+    // Fetch issues from all spaces the user can see
+    var spaces = (S.data.spaces || []);
+    var allIssues = [];
+    for (var i = 0; i < spaces.length; i++) {
+      try {
+        var issues = await api('/api/spaces/' + spaces[i].id + '/issues');
+        (issues || []).forEach(function(iss){ iss._spaceName = spaces[i].name; iss._spaceId = spaces[i].id; });
+        allIssues = allIssues.concat(issues || []);
+      } catch(e) { /* skip inaccessible spaces */ }
+    }
+    _prmData = allIssues;
+    _prmRender();
+  } catch(e) {
+    if (content) content.innerHTML = '<p class="text-muted" style="padding:24px">Failed to load roadmap data.</p>';
+  }
+};
+
+window._prmRender = function() {
+  var content = $('prmContent');
+  if (!content) return;
+  if (!_prmData.length) { content.innerHTML = '<p class="text-muted placeholder-text">No issues found.</p>'; return; }
+
+  var groupBy  = ($('prmGroupBy')  || {}).value || 'space';
+  var zoom     = ($('prmZoom')     || {}).value || 'month';
+  var fStatus  = ($('prmFilterStatus') || {}).value || '';
+  var fType    = ($('prmFilterType')   || {}).value || '';
+
+  // Apply filters
+  var issues = _prmData.filter(function(iss) {
+    if (fStatus && iss.status !== fStatus) return false;
+    if (fType   && iss.type   !== fType)   return false;
+    return true;
+  });
+
+  if (_prmView === 'list') {
+    content.innerHTML = _prmListView(issues, groupBy);
+  } else {
+    content.innerHTML = _prmTimelineView(issues, groupBy, zoom);
+  }
+};
+
+function _prmGroup(issues, groupBy) {
+  var groups = {}, order = [];
+  issues.forEach(function(iss) {
+    var key = groupBy === 'space'    ? (iss._spaceName || '—')
+            : groupBy === 'sprint'   ? (_prmSprintLabel(iss.sprint_id) || 'No Sprint')
+            : groupBy === 'priority' ? (iss.priority || 'No Priority')
+            : groupBy === 'type'     ? (iss.type     || 'No Type')
+            : (iss._spaceName || '—');
+    if (!groups[key]) { groups[key] = []; order.push(key); }
+    groups[key].push(iss);
+  });
+  order.sort();
+  return { groups: groups, order: order };
+}
+
+function _prmSprintLabel(sprintId) {
+  if (!sprintId) return null;
+  var sp = (S.data.sprints || []).find(function(s){ return s.id == sprintId; });
+  return sp ? sp.name : ('Sprint ' + sprintId);
+}
+
+function _prmStatusColor(status) {
+  return status === 'Done' ? 'var(--success)' : status === 'In Progress' ? 'var(--accent)' : status === 'In Review' ? '#9b59b6' : 'var(--text3)';
+}
+function _prmPriorityBadge(p) {
+  var colors = { critical:'#e74c3c', high:'#e67e22', medium:'#3498db', low:'#95a5a6' };
+  return p ? '<span class="prm-badge" style="background:' + (colors[p]||'#95a5a6') + '">' + esc(p) + '</span>' : '';
+}
+
+// ── List View ──
+function _prmListView(issues, groupBy) {
+  var g = _prmGroup(issues, groupBy);
+  var html = '<div class="prm-list">';
+  g.order.forEach(function(gKey) {
+    var rows = g.groups[gKey];
+    html += '<div class="prm-list-group">' +
+      '<div class="prm-list-group-hdr"><span class="prm-list-group-icon">▸</span> ' + esc(gKey) + ' <span class="prm-list-count">' + rows.length + ' items</span></div>' +
+      '<table class="prm-list-table"><thead><tr>' +
+        '<th>Key</th><th>Title</th><th>Type</th><th>Status</th><th>Priority</th><th>Start Date</th><th>Due Date</th><th>Assignee</th>' +
+      '</tr></thead><tbody>';
+    rows.forEach(function(iss) {
+      var u = findUser(iss.assignee_id);
+      html += '<tr class="prm-list-row" onclick="openIssuePage(\'' + iss.id + '\')">' +
+        '<td><span class="prm-issue-key">' + esc(iss.issue_key||iss.id) + '</span></td>' +
+        '<td class="prm-issue-title">' + esc(iss.title||'—') + '</td>' +
+        '<td><span class="prm-type-badge prm-type-' + (iss.type||'task') + '">' + esc(iss.type||'task') + '</span></td>' +
+        '<td><span class="prm-status-dot" style="color:' + _prmStatusColor(iss.status) + '">● </span>' + esc(iss.status||'—') + '</td>' +
+        '<td>' + _prmPriorityBadge(iss.priority) + '</td>' +
+        '<td class="text-muted">' + esc(iss.start_date ? iss.start_date.slice(0,10) : '—') + '</td>' +
+        '<td class="text-muted">' + esc(iss.due_date  ? iss.due_date.slice(0,10)   : '—') + '</td>' +
+        '<td class="text-muted">' + esc(u ? u.name : '—') + '</td>' +
+      '</tr>';
+    });
+    html += '</tbody></table></div>';
+  });
+  return html + '</div>';
+}
+
+// ── Timeline (Gantt) View ──
+function _prmTimelineView(issues, groupBy, zoom) {
+  // Determine date range from issues (start_date / due_date)
+  var today = new Date(); today.setHours(0,0,0,0);
+  var minDate = new Date(today); minDate.setMonth(minDate.getMonth() - 1);
+  var maxDate = new Date(today); maxDate.setMonth(maxDate.getMonth() + 6);
+
+  issues.forEach(function(iss) {
+    if (iss.start_date) { var d = new Date(iss.start_date); if (d < minDate) minDate = d; }
+    if (iss.due_date)   { var d = new Date(iss.due_date);   if (d > maxDate) maxDate = d; }
+  });
+
+  // Build time columns
+  var cols = [], cur = new Date(minDate);
+  if (zoom === 'week')    { cur.setDate(cur.getDate() - cur.getDay() + 1); } // start Monday
+  else if (zoom === 'month')   { cur = new Date(cur.getFullYear(), cur.getMonth(), 1); }
+  else if (zoom === 'quarter') { var qm = Math.floor(cur.getMonth()/3)*3; cur = new Date(cur.getFullYear(), qm, 1); }
+
+  while (cur <= maxDate) {
+    var label, next;
+    if (zoom === 'week') {
+      label = String(cur.getDate()).padStart(2,'0') + '/' + String(cur.getMonth()+1).padStart(2,'0');
+      next = new Date(cur); next.setDate(next.getDate() + 7);
+    } else if (zoom === 'quarter') {
+      var qNames = ['Q1','Q2','Q3','Q4'];
+      label = qNames[Math.floor(cur.getMonth()/3)] + ' ' + cur.getFullYear();
+      next = new Date(cur); next.setMonth(next.getMonth() + 3);
+    } else {
+      var mNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      label = mNames[cur.getMonth()] + ' ' + cur.getFullYear();
+      next = new Date(cur); next.setMonth(next.getMonth() + 1);
+    }
+    cols.push({ start: new Date(cur), end: new Date(next), label: label });
+    cur = next;
+  }
+  if (!cols.length) return '<p class="text-muted placeholder-text">No timeline data available.</p>';
+
+  var totalSpan = (maxDate - minDate); // ms
+
+  function datePct(d) {
+    if (!d) return null;
+    var dt = new Date(d);
+    return Math.max(0, Math.min(100, ((dt - minDate) / totalSpan) * 100));
+  }
+
+  var g = _prmGroup(issues, groupBy);
+  var LABEL_COL = 220; // px
+
+  var html = '<div class="prm-timeline-wrap">' +
+    '<div class="prm-tl-header" style="padding-left:' + LABEL_COL + 'px">';
+  // Column headers
+  cols.forEach(function(col) {
+    var isToday = today >= col.start && today < col.end;
+    html += '<div class="prm-tl-col-hdr' + (isToday ? ' prm-tl-today-col' : '') + '">' + esc(col.label) + '</div>';
+  });
+  html += '</div><div class="prm-tl-body">';
+
+  g.order.forEach(function(gKey) {
+    var rows = g.groups[gKey];
+    // Group header row
+    html += '<div class="prm-tl-group-row">' +
+      '<div class="prm-tl-label prm-tl-group-label" style="width:' + LABEL_COL + 'px">' + esc(gKey) + ' <span class="prm-list-count">(' + rows.length + ')</span></div>' +
+      '<div class="prm-tl-bar-track"></div></div>';
+
+    rows.forEach(function(iss) {
+      var startPct = datePct(iss.start_date);
+      var endPct   = datePct(iss.due_date);
+      var hasDates = startPct !== null || endPct !== null;
+      if (startPct === null) startPct = endPct !== null ? Math.max(0, endPct - 5) : 0;
+      if (endPct   === null) endPct   = Math.min(100, startPct + 5);
+      var width = Math.max(1, endPct - startPct);
+      var barColor = iss.type === 'epic' ? '#9b59b6' : iss.status === 'Done' ? 'var(--success)' : iss.status === 'In Progress' ? 'var(--accent)' : 'var(--text3)';
+
+      html += '<div class="prm-tl-issue-row" onclick="openIssuePage(\'' + iss.id + '\')">' +
+        '<div class="prm-tl-label" style="width:' + LABEL_COL + 'px">' +
+          '<span class="prm-type-icon prm-type-' + (iss.type||'task') + '"></span>' +
+          '<span class="prm-issue-key">' + esc(iss.issue_key||'') + '</span> ' +
+          '<span class="prm-tl-issue-title">' + esc((iss.title||'').slice(0,30) + ((iss.title||'').length>30?'…':'')) + '</span>' +
+        '</div>' +
+        '<div class="prm-tl-bar-track">' +
+          (hasDates
+            ? '<div class="prm-tl-bar" style="left:' + startPct.toFixed(1) + '%;width:' + width.toFixed(1) + '%;background:' + barColor + '" title="' + esc((iss.start_date||'?').slice(0,10)) + ' → ' + esc((iss.due_date||'?').slice(0,10)) + '"></div>'
+            : '<div class="prm-tl-no-date">— no dates —</div>')
+          +
+        '</div></div>';
+    });
+  });
+
+  // Today marker
+  var todayPct = datePct(today.toISOString().slice(0,10));
+  html += '</div>' +
+    '<div class="prm-tl-today-marker" style="left:calc(' + LABEL_COL + 'px + ' + todayPct.toFixed(1) + '%)"></div>' +
+    '</div>';
+  return html;
+}
+
+// ═══════════════════════════════════════════════════════════
 async function _wlrFetch() {
   var content = $('wlrContent');
   if (content) content.innerHTML = '<p class="text-muted" style="padding:24px">Loading…</p>';
@@ -1175,28 +1394,26 @@ function _wlrHeatColor(mins, maxMins) {
 // DYNAMIC PIVOT (Jira Worklog Pro-style)
 // ═══════════════════════════════════════════════════════════
 var WLR_PIVOT_FIELDS_DEFAULT = [
-  { key: 'user_name',   label: 'User',               type: 'dimension' },
-  { key: 'space_name',  label: 'Space',              type: 'dimension' },
-  { key: 'issue_key',   label: 'Issue Key',          type: 'dimension' },
-  { key: 'issue_title', label: 'Issue Title',        type: 'dimension' },
-  { key: 'work_date',   label: 'Date',               type: 'dimension' },
-  { key: 'is_billable', label: 'Billable',           type: 'dimension' },
-  { key: 'time_spent',  label: 'Time Spent (hours)', type: 'measure'   },
-  { key: 'count',       label: 'Count of Worklogs',  type: 'measure'   }
+  { key: 'work_date',   label: 'Date',              type: 'dimension' },
+  { key: 'user_name',   label: 'User',              type: 'dimension' },
+  { key: 'space_name',  label: 'Space',             type: 'dimension' },
+  { key: 'issue_key',   label: 'Issue Key',         type: 'dimension' },
+  { key: 'issue_title', label: 'Issue Title',       type: 'dimension' },
+  { key: 'description', label: 'Description',       type: 'dimension' },
+  { key: 'is_billable', label: 'Billable',          type: 'dimension' },
+  { key: 'time_spent',  label: 'Sum of Time (h)',   type: 'measure'   },
+  { key: 'count',       label: 'Count of Worklogs', type: 'measure'   }
 ];
 var WLR_PIVOT_FIELDS = WLR_PIVOT_FIELDS_DEFAULT.slice();
 
 var _wlrPivotConfig = {
   rows:    ['user_name', 'issue_key'],
   cols:    ['work_date'],
-  values:  ['time_spent', 'count'],
+  values:  ['time_spent'],   // drag 'Count of Worklogs' here to add count
   filters: []
 };
 
-// Metric shown in pivot cells: 'time' | 'count' | 'both'
-var _wlrPivotMetric = 'time';
-
-// Collapsed user-row nodes: set of nodeIds
+// Collapsed user-row nodes: nodeId → true/false
 var _wlrCollapsed = {};
 
 window._wlrToggleCollapse = function(nodeId) {
@@ -1204,10 +1421,9 @@ window._wlrToggleCollapse = function(nodeId) {
   var c = $('wlrContent'); if (c) c.innerHTML = _wlrDynamicPivot(_wlrData);
 };
 
-window._wlrSetMetric = function(m) {
-  _wlrPivotMetric = m;
-  var c = $('wlrContent'); if (c) c.innerHTML = _wlrDynamicPivot(_wlrData);
-};
+// Derived helpers — Values zone is the single source of truth
+function _wlrPivotShowTime(cfg)  { return cfg.values.indexOf('time_spent') >= 0; }
+function _wlrPivotShowCount(cfg) { return cfg.values.indexOf('count')      >= 0; }
 
 function _wlrGetFieldVal(row, key) {
   if (key === 'user_name')   { var u = findUser(row.user_id); return u ? u.name : (row.user_name || '?'); }
@@ -1216,6 +1432,7 @@ function _wlrGetFieldVal(row, key) {
   if (key === 'issue_title') return row.issue_title || '—';
   if (key === 'work_date')   return row.work_date   ? row.work_date.slice(0,10) : '—';
   if (key === 'is_billable') return row.is_billable ? 'Billable' : 'Non-billable';
+  if (key === 'description') return row.description || '—';
   if (key === 'time_spent')  return row.time_spent  || 0;
   return '—';
 }
@@ -1231,7 +1448,8 @@ function _wlrRefreshZone(zone) {
   }
   el.innerHTML = items.map(function(key) {
     var f = WLR_PIVOT_FIELDS.find(function(f){ return f.key === key; });
-    var label = (zone === 'values' ? '≡ Σ ' : '') + (f ? f.label : key);
+    var prefix = zone === 'values' ? (key === 'time_spent' ? 'Σ ' : key === 'count' ? '# ' : 'Σ ') : '';
+    var label = prefix + (f ? f.label : key);
     return '<div class="wlr-zone-chip" draggable="true" data-field="' + key + '" data-zone="' + zone + '"' +
       ' ondragstart="window._wlrDragStart(event,\'' + key + '\')">' +
       '<span class="wlr-zone-chip-label">' + esc(label) + '</span>' +
@@ -1340,6 +1558,10 @@ function _wlrDynamicPivot(data) {
     if (!colValues.length) colValues = [];
   }
 
+  // ── What to show: driven by Values zone ──
+  var showTime  = _wlrPivotShowTime(cfg);
+  var showCount = _wlrPivotShowCount(cfg);
+
   // ── Aggregation helpers ──
   function subset(rows, colVal) {
     if (noColMode || !colVal) return rows;
@@ -1347,29 +1569,32 @@ function _wlrDynamicPivot(data) {
   }
   function aggTime(rows, colVal)  { return subset(rows, colVal).reduce(function(s,r){ return s+(r.time_spent||0); }, 0); }
   function aggCount(rows, colVal) { return subset(rows, colVal).length; }
-  function agg(rows, colVal)      { return _wlrPivotMetric === 'count' ? aggCount(rows,colVal) : aggTime(rows,colVal); }
+  function agg(rows, colVal)      { return showCount && !showTime ? aggCount(rows,colVal) : aggTime(rows,colVal); }
 
   // Format cell value: flat-tree mode → decimal hours; matrix mode → Xh Ym with heat-map
   function fmtCell(rows, colVal) {
     var t = aggTime(rows, colVal), n = aggCount(rows, colVal);
     if (noColMode) {
-      if (_wlrPivotMetric === 'count') return n ? String(n) : null;
-      if (_wlrPivotMetric === 'time')  return t ? (t/60).toFixed(2) : null;
-      if (!t && !n) return null;
-      return (t/60).toFixed(2) + '<br><span style="font-size:10px;opacity:.75">' + n + ' log' + (n!==1?'s':'') + '</span>';
+      if (showTime && showCount) return (t||n) ? (t/60).toFixed(2) + '<br><span style="font-size:10px;opacity:.75">' + n + ' log' + (n!==1?'s':'') + '</span>' : null;
+      if (showTime)  return t ? (t/60).toFixed(2) : null;
+      if (showCount) return n ? String(n) : null;
+      return null;
     }
-    if (_wlrPivotMetric === 'time')  return t ? _wlrFmt(t) : null;
-    if (_wlrPivotMetric === 'count') return n ? String(n) : null;
-    if (!t && !n) return null;
-    return (t ? _wlrFmt(t) : '0h') + '<br><span style="font-size:10px;opacity:.75">' + n + ' log' + (n!==1?'s':'') + '</span>';
+    if (showTime && showCount) {
+      if (!t && !n) return null;
+      return (t ? _wlrFmt(t) : '0h') + '<br><span style="font-size:10px;opacity:.75">' + n + ' log' + (n!==1?'s':'') + '</span>';
+    }
+    if (showTime)  return t ? _wlrFmt(t) : null;
+    if (showCount) return n ? String(n)  : null;
+    return null;
   }
 
   // Format row total (right-side Total col, matrix mode only)
   function fmtRowTotal(rows) {
     var t = rows.reduce(function(s,r){ return s+(r.time_spent||0); }, 0), n = rows.length;
-    if (_wlrPivotMetric === 'count') return String(n);
-    if (_wlrPivotMetric === 'time')  return _wlrFmt(t);
-    return _wlrFmt(t) + '<br><span style="font-size:10px;opacity:.75">' + n + ' logs</span>';
+    if (showTime && showCount) return _wlrFmt(t) + '<br><span style="font-size:10px;opacity:.75">' + n + ' logs</span>';
+    if (showCount) return String(n);
+    return _wlrFmt(t);
   }
 
   // ── Build row tree ──
@@ -1402,13 +1627,14 @@ function _wlrDynamicPivot(data) {
     if (tree) scanMax(tree); else colValues.forEach(function(c){ var v = agg(data, c); if (v > maxCell) maxCell = v; });
   }
 
-  // ── Metric toggle bar ──
-  var metricBar = '<div class="wlr-pivot-metric-bar">' +
-    '<span class="wlr-pm-label">Values:</span>' +
-    '<button class="wlr-pm-btn' + (_wlrPivotMetric==='time'?' active':'')  + '" onclick="window._wlrSetMetric(\'time\')">⏱ Sum of Time</button>' +
-    '<button class="wlr-pm-btn' + (_wlrPivotMetric==='count'?' active':'') + '" onclick="window._wlrSetMetric(\'count\')">🔢 Count of Logs</button>' +
-    '<button class="wlr-pm-btn' + (_wlrPivotMetric==='both'?' active':'')  + '" onclick="window._wlrSetMetric(\'both\')">⊞ Both</button>' +
-  '</div>';
+  // ── Info bar: Values zone is the source of truth ──
+  var valDesc = cfg.values.map(function(k) {
+    var f = WLR_PIVOT_FIELDS.find(function(f){ return f.key === k; });
+    return (k === 'time_spent' ? 'Σ ' : k === 'count' ? '# ' : '') + (f ? f.label : k);
+  }).join(' · ');
+  var metricBar = cfg.values.length
+    ? '<div class="wlr-pivot-info-bar">Values: <strong>' + esc(valDesc) + '</strong><span class="wlr-pivot-info-hint"> — open Field List to add/remove measures</span></div>'
+    : '<div class="wlr-pivot-info-bar wlr-pivot-info-warn">⚠ No values selected — drag a measure (Σ) into the Values zone via Field List</div>';
 
   // ── Column label (date formatting) ──
   function colLabel(val) {
@@ -1420,9 +1646,9 @@ function _wlrDynamicPivot(data) {
   }
 
   // ── Single value column header (flat-tree mode) ──
-  var singleColHdr = _wlrPivotMetric === 'count' ? 'Count of Worklogs'
-                   : _wlrPivotMetric === 'time'  ? 'Total Sum of Time (hours)'
-                   : 'Total';
+  var singleColHdr = (showTime && showCount) ? 'Total'
+                   : showCount ? 'Count of Worklogs'
+                   : 'Total Sum of Time (hours)';
 
   var rowDepth = rowFields.length || 1;
   var html = metricBar + '<div class="wlr-pivot-wrap"><table class="wlr-pivot-table"><thead><tr>';
@@ -1484,17 +1710,17 @@ function _wlrDynamicPivot(data) {
       if (noColMode) {
         // Single value cell
         var disp = fmtCell(node.rows, null);
-        html += '<td class="wlr-pivot-td wlr-pivot-total-cell' + (_wlrPivotMetric==='both'?' wlr-pivot-cell-both':'') + '" style="text-align:right">' +
+        html += '<td class="wlr-pivot-td wlr-pivot-total-cell' + ((showTime && showCount)?' wlr-pivot-cell-both':'') + '" style="text-align:right">' +
                 (disp || '<span class="wlr-pivot-empty">—</span>') + '</td>';
       } else {
         // Per-column cells + row total
         colValues.forEach(function(c) {
           var v = agg(node.rows, c);
           var disp = fmtCell(node.rows, c);
-          html += '<td class="wlr-pivot-td wlr-pivot-cell' + (_wlrPivotMetric==='both'?' wlr-pivot-cell-both':'') + '" style="' + _wlrHeatColor(v, maxCell) + '">' +
+          html += '<td class="wlr-pivot-td wlr-pivot-cell' + ((showTime && showCount)?' wlr-pivot-cell-both':'') + '" style="' + _wlrHeatColor(v, maxCell) + '">' +
                   (disp ? disp : '<span class="wlr-pivot-empty">—</span>') + '</td>';
         });
-        html += '<td class="wlr-pivot-td wlr-pivot-total-cell' + (_wlrPivotMetric==='both'?' wlr-pivot-cell-both':'') + '">' + fmtRowTotal(node.rows) + '</td>';
+        html += '<td class="wlr-pivot-td wlr-pivot-total-cell' + ((showTime && showCount)?' wlr-pivot-cell-both':'') + '">' + fmtRowTotal(node.rows) + '</td>';
       }
       html += '</tr>';
 
@@ -1514,7 +1740,7 @@ function _wlrDynamicPivot(data) {
     } else {
       colValues.forEach(function(c) {
         var v = agg(data,c); var disp = fmtCell(data,c);
-        html += '<td class="wlr-pivot-td wlr-pivot-cell' + (_wlrPivotMetric==='both'?' wlr-pivot-cell-both':'') + '" style="' + _wlrHeatColor(v, maxCell) + '">' + (disp||'<span class="wlr-pivot-empty">—</span>') + '</td>';
+        html += '<td class="wlr-pivot-td wlr-pivot-cell' + ((showTime && showCount)?' wlr-pivot-cell-both':'') + '" style="' + _wlrHeatColor(v, maxCell) + '">' + (disp||'<span class="wlr-pivot-empty">—</span>') + '</td>';
       });
       html += '<td class="wlr-pivot-td wlr-pivot-total-cell">' + fmtRowTotal(data) + '</td>';
     }
@@ -1533,10 +1759,10 @@ function _wlrDynamicPivot(data) {
   } else {
     colValues.forEach(function(c) {
       var v = agg(data,c); var disp = fmtCell(data,c);
-      html += '<td class="wlr-pivot-td wlr-pivot-cell wlr-pivot-footer-cell' + (_wlrPivotMetric==='both'?' wlr-pivot-cell-both':'') + '">' + (disp||'<span class="wlr-pivot-empty">—</span>') + '</td>';
+      html += '<td class="wlr-pivot-td wlr-pivot-cell wlr-pivot-footer-cell' + ((showTime && showCount)?' wlr-pivot-cell-both':'') + '">' + (disp||'<span class="wlr-pivot-empty">—</span>') + '</td>';
     });
-    var gtFootDisp = _wlrPivotMetric==='count' ? String(data.length) : _wlrPivotMetric==='time' ? _wlrFmt(grandTotal)
-      : _wlrFmt(grandTotal) + '<br><span style="font-size:10px;opacity:.75">' + data.length + ' logs</span>';
+    var gtFootDisp = (showTime && showCount) ? _wlrFmt(grandTotal) + '<br><span style="font-size:10px;opacity:.75">' + data.length + ' logs</span>'
+      : showCount ? String(data.length) : _wlrFmt(grandTotal);
     html += '<td class="wlr-pivot-td wlr-pivot-total-cell wlr-pivot-grand-total">' + gtFootDisp + '</td>';
   }
   html += '</tr></tfoot></table></div>';

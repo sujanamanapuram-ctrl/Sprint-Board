@@ -1651,11 +1651,17 @@ function _wlrDynamicPivot(data) {
                    : 'Total Sum of Time (hours)';
 
   var rowDepth = rowFields.length || 1;
+  // In no-column mode: collapse all row fields into 1 label column (issues indented inside)
+  var effectiveRowCols = noColMode ? 1 : rowDepth;
   var html = metricBar + '<div class="wlr-pivot-wrap"><table class="wlr-pivot-table"><thead><tr>';
 
   // Row-field header columns
-  if (rowFields.length) {
-    rowFields.forEach(function(rk, idx) {
+  if (noColMode) {
+    // Single label column — first row field label (e.g. "User")
+    var firstF = rowFields.length ? WLR_PIVOT_FIELDS.find(function(f){ return f.key === rowFields[0]; }) : null;
+    html += '<th class="wlr-pivot-th wlr-pivot-label-col">' + esc(firstF ? firstF.label : 'Item') + '</th>';
+  } else if (rowFields.length) {
+    rowFields.forEach(function(rk) {
       var f = WLR_PIVOT_FIELDS.find(function(f){ return f.key === rk; });
       html += '<th class="wlr-pivot-th wlr-pivot-label-col">' + esc(f ? f.label : rk) + '</th>';
     });
@@ -1694,14 +1700,19 @@ function _wlrDynamicPivot(data) {
       var lbl;
       if (node.field === 'issue_key') {
         var ir = node.rows[0];
-        lbl = '<span class="wlr-pivot-issue-key" onclick="openIssuePage(\'' + (ir ? ir.issue_id : '') + '\')">' + esc(node.label) + '</span>';
+        var indentPx = noColMode ? (depth * 20) : 0;
+        lbl = (noColMode ? '<span style="display:inline-block;width:' + indentPx + 'px"></span>' : '') +
+              '<span class="wlr-pivot-issue-key" onclick="openIssuePage(\'' + (ir ? ir.issue_id : '') + '\')">' + esc(node.label) + '</span>';
         if (ir && ir.issue_title) lbl += ' <span class="wlr-pivot-issue-title">' + esc(ir.issue_title) + '</span>';
       } else if (noColMode && isTop && hasChildren) {
-        // Collapsible user row in flat mode
+        // Collapsible top-level row in flat mode
         var arrow = collapsed ? '›' : '∨';
         lbl = '<span class="wlr-pivot-collapse-btn" onclick="window._wlrToggleCollapse(\'' + safeId + '\')">' + arrow + '</span> ' + esc(node.label);
+      } else if (noColMode && !isTop) {
+        // Generic indented sub-row
+        lbl = '<span style="display:inline-block;width:' + (depth * 20) + 'px"></span>' + esc(node.label);
       } else {
-        lbl = (noColMode && !isTop ? '<span style="display:inline-block;width:16px"></span>' : '') + esc(node.label);
+        lbl = esc(node.label);
       }
 
       html += '<td class="wlr-pivot-td wlr-pivot-label-col ' + (isTop ? 'wlr-pivot-user-label' : 'wlr-pivot-issue-label') + '"' +
@@ -1733,7 +1744,7 @@ function _wlrDynamicPivot(data) {
   } else {
     // No row fields configured — show grand total only
     html += '<tr class="wlr-pivot-user-row"><td class="wlr-pivot-td wlr-pivot-label-col wlr-pivot-user-label"' +
-            (rowDepth > 1 ? ' colspan="' + rowDepth + '"' : '') + '>Grand Total</td>';
+            (effectiveRowCols > 1 ? ' colspan="' + effectiveRowCols + '"' : '') + '>Grand Total</td>';
     if (noColMode) {
       var gtd = fmtCell(data, null);
       html += '<td class="wlr-pivot-td wlr-pivot-total-cell" style="text-align:right">' + (gtd||'—') + '</td>';
@@ -1750,7 +1761,7 @@ function _wlrDynamicPivot(data) {
   // ── Grand total footer row ──
   var grandTotal = data.reduce(function(s,r){ return s+(r.time_spent||0); }, 0);
   html += '</tbody><tfoot><tr class="wlr-pivot-footer-row">';
-  for (var i = 0; i < rowDepth; i++) {
+  for (var i = 0; i < effectiveRowCols; i++) {
     html += '<td class="wlr-pivot-td wlr-pivot-label-col wlr-pivot-footer-label">' + (i===0 ? 'Grand total' : '') + '</td>';
   }
   if (noColMode) {

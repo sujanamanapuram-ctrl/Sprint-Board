@@ -999,10 +999,10 @@ function renderWorklogReport() {
 }
 
 // ═══════════════════════════════════════════════════════════
-//  PRODUCT ROADMAP
+//  PRODUCT ROADMAP  (DB-backed via /api/roadmap)
 // ═══════════════════════════════════════════════════════════
-var _prmView    = 'timeline';  // 'timeline' | 'list'
-var _prmData    = [];
+var _prmView = 'timeline';   // 'timeline' | 'list' | 'board'
+var _prmData = [];           // roadmap_items from DB
 
 window._prmSetView = function(v) {
   _prmView = v;
@@ -1013,24 +1013,25 @@ window._prmSetView = function(v) {
 async function renderProductRoadmap() {
   var content = $('prmContent');
   if (content) content.innerHTML = '<p class="text-muted" style="padding:24px">Loading…</p>';
+  // Populate space filter
+  var spSel = $('prmFilterSpace');
+  if (spSel) {
+    var spaces = S.data.spaces || [];
+    spSel.innerHTML = '<option value="">All Spaces</option>' +
+      spaces.map(function(sp){ return '<option value="' + sp.id + '">' + esc(sp.name) + '</option>'; }).join('');
+  }
   await _prmLoad();
 }
 
+// Load roadmap items from DB
 window._prmLoad = async function() {
   var content = $('prmContent');
   if (content) content.innerHTML = '<p class="text-muted" style="padding:24px">Loading…</p>';
   try {
-    // Fetch issues from all spaces the user can see
-    var spaces = (S.data.spaces || []);
-    var allIssues = [];
-    for (var i = 0; i < spaces.length; i++) {
-      try {
-        var issues = await api('/api/spaces/' + spaces[i].id + '/issues');
-        (issues || []).forEach(function(iss){ iss._spaceName = spaces[i].name; iss._spaceId = spaces[i].id; });
-        allIssues = allIssues.concat(issues || []);
-      } catch(e) { /* skip inaccessible spaces */ }
-    }
-    _prmData = allIssues;
+    var params = [];
+    var spaceFilter = ($('prmFilterSpace') || {}).value || '';
+    if (spaceFilter) params.push('space_id=' + encodeURIComponent(spaceFilter));
+    _prmData = await api('/api/roadmap' + (params.length ? '?' + params.join('&') : ''));
     _prmRender();
   } catch(e) {
     if (content) content.innerHTML = '<p class="text-muted" style="padding:24px">Failed to load roadmap data.</p>';
@@ -1040,78 +1041,80 @@ window._prmLoad = async function() {
 window._prmRender = function() {
   var content = $('prmContent');
   if (!content) return;
-  if (!_prmData.length) { content.innerHTML = '<p class="text-muted placeholder-text">No issues found.</p>'; return; }
 
-  var groupBy  = ($('prmGroupBy')  || {}).value || 'space';
-  var zoom     = ($('prmZoom')     || {}).value || 'month';
-  var fStatus  = ($('prmFilterStatus') || {}).value || '';
-  var fType    = ($('prmFilterType')   || {}).value || '';
-
-  // Apply filters
-  var issues = _prmData.filter(function(iss) {
-    if (fStatus && iss.status !== fStatus) return false;
-    if (fType   && iss.type   !== fType)   return false;
+  // Apply client-side filters
+  var fStatus   = ($('prmFilterStatus')   || {}).value || '';
+  var fPriority = ($('prmFilterPriority') || {}).value || '';
+  var items = _prmData.filter(function(r) {
+    if (fStatus   && r.status   !== fStatus)   return false;
+    if (fPriority && r.priority !== fPriority) return false;
     return true;
   });
 
-  if (_prmView === 'list') {
-    content.innerHTML = _prmListView(issues, groupBy);
-  } else {
-    content.innerHTML = _prmTimelineView(issues, groupBy, zoom);
+  if (!items.length) {
+    content.innerHTML = '<div class="prm-empty"><p class="text-muted">No roadmap items found.</p>' +
+      '<button class="btn btn-primary btn-sm" onclick="window._prmOpenModal()">＋ Add First Item</button></div>';
+    return;
   }
+
+  var groupBy = ($('prmGroupBy') || {}).value || 'status';
+  var zoom    = ($('prmZoom')    || {}).value || 'month';
+
+  if      (_prmView === 'list')     content.innerHTML = _prmListView(items, groupBy);
+  else if (_prmView === 'board')    content.innerHTML = _prmBoardView(items);
+  else                              content.innerHTML = _prmTimelineView(items, groupBy, zoom);
 };
 
-function _prmGroup(issues, groupBy) {
+// ── Helpers ──
+function _prmStatusColor(status) {
+  var m = { planned:'#95a5a6', 'in_progress':'var(--accent)', completed:'var(--success)', on_hold:'#e67e22' };
+  return m[status] || '#95a5a6';
+}
+function _prmStatusLabel(s) {
+  return { planned:'Planned', in_progress:'In Progress', completed:'Completed', on_hold:'On Hold' }[s] || s || '—';
+}
+function _prmPriorityBadge(p) {
+  var c = { critical:'#e74c3c', high:'#e67e22', medium:'#3498db', low:'#95a5a6' };
+  return p ? '<span class="prm-badge" style="background:' + (c[p]||'#95a5a6') + '">' + esc(p) + '</span>' : '';
+}
+function _prmGroup(items, groupBy) {
   var groups = {}, order = [];
-  issues.forEach(function(iss) {
-    var key = groupBy === 'space'    ? (iss._spaceName || '—')
-            : groupBy === 'sprint'   ? (_prmSprintLabel(iss.sprint_id) || 'No Sprint')
-            : groupBy === 'priority' ? (iss.priority || 'No Priority')
-            : groupBy === 'type'     ? (iss.type     || 'No Type')
-            : (iss._spaceName || '—');
+  items.forEach(function(r) {
+    var key = groupBy === 'space'    ? (r.space_name || 'No Space')
+            : groupBy === 'priority' ? (r.priority   || 'No Priority')
+            : groupBy === 'assigned' ? (r.assigned_name || 'Unassigned')
+            : _prmStatusLabel(r.status);
     if (!groups[key]) { groups[key] = []; order.push(key); }
-    groups[key].push(iss);
+    groups[key].push(r);
   });
   order.sort();
   return { groups: groups, order: order };
 }
 
-function _prmSprintLabel(sprintId) {
-  if (!sprintId) return null;
-  var sp = (S.data.sprints || []).find(function(s){ return s.id == sprintId; });
-  return sp ? sp.name : ('Sprint ' + sprintId);
-}
-
-function _prmStatusColor(status) {
-  return status === 'Done' ? 'var(--success)' : status === 'In Progress' ? 'var(--accent)' : status === 'In Review' ? '#9b59b6' : 'var(--text3)';
-}
-function _prmPriorityBadge(p) {
-  var colors = { critical:'#e74c3c', high:'#e67e22', medium:'#3498db', low:'#95a5a6' };
-  return p ? '<span class="prm-badge" style="background:' + (colors[p]||'#95a5a6') + '">' + esc(p) + '</span>' : '';
-}
-
 // ── List View ──
-function _prmListView(issues, groupBy) {
-  var g = _prmGroup(issues, groupBy);
+function _prmListView(items, groupBy) {
+  var g = _prmGroup(items, groupBy);
   var html = '<div class="prm-list">';
   g.order.forEach(function(gKey) {
     var rows = g.groups[gKey];
     html += '<div class="prm-list-group">' +
-      '<div class="prm-list-group-hdr"><span class="prm-list-group-icon">▸</span> ' + esc(gKey) + ' <span class="prm-list-count">' + rows.length + ' items</span></div>' +
+      '<div class="prm-list-group-hdr">▸ ' + esc(gKey) + ' <span class="prm-list-count">' + rows.length + ' items</span></div>' +
       '<table class="prm-list-table"><thead><tr>' +
-        '<th>Key</th><th>Title</th><th>Type</th><th>Status</th><th>Priority</th><th>Start Date</th><th>Due Date</th><th>Assignee</th>' +
+        '<th>Title</th><th>Status</th><th>Priority</th><th>Space</th><th>Linked Issue</th>' +
+        '<th>Start Date</th><th>End Date</th><th>Assignee</th><th></th>' +
       '</tr></thead><tbody>';
-    rows.forEach(function(iss) {
-      var u = findUser(iss.assignee_id);
-      html += '<tr class="prm-list-row" onclick="openIssuePage(\'' + iss.id + '\')">' +
-        '<td><span class="prm-issue-key">' + esc(iss.issue_key||iss.id) + '</span></td>' +
-        '<td class="prm-issue-title">' + esc(iss.title||'—') + '</td>' +
-        '<td><span class="prm-type-badge prm-type-' + (iss.type||'task') + '">' + esc(iss.type||'task') + '</span></td>' +
-        '<td><span class="prm-status-dot" style="color:' + _prmStatusColor(iss.status) + '">● </span>' + esc(iss.status||'—') + '</td>' +
-        '<td>' + _prmPriorityBadge(iss.priority) + '</td>' +
-        '<td class="text-muted">' + esc(iss.start_date ? iss.start_date.slice(0,10) : '—') + '</td>' +
-        '<td class="text-muted">' + esc(iss.due_date  ? iss.due_date.slice(0,10)   : '—') + '</td>' +
-        '<td class="text-muted">' + esc(u ? u.name : '—') + '</td>' +
+    rows.forEach(function(r) {
+      html += '<tr class="prm-list-row">' +
+        '<td class="prm-item-title" onclick="window._prmOpenModal(\'' + r.id + '\')">' +
+          '<span class="prm-color-dot" style="background:' + esc(r.color||'#4d90e0') + '"></span>' + esc(r.title) + '</td>' +
+        '<td><span class="prm-status-chip" style="background:' + _prmStatusColor(r.status) + '">' + esc(_prmStatusLabel(r.status)) + '</span></td>' +
+        '<td>' + _prmPriorityBadge(r.priority) + '</td>' +
+        '<td class="text-muted">' + esc(r.space_name||'—') + '</td>' +
+        '<td>' + (r.issue_key ? '<span class="prm-issue-key" onclick="openIssuePage(\'' + r.issue_id + '\')">' + esc(r.issue_key) + '</span>' : '<span class="text-muted">—</span>') + '</td>' +
+        '<td class="text-muted">' + esc(r.start_date ? r.start_date.slice(0,10) : '—') + '</td>' +
+        '<td class="text-muted">' + esc(r.end_date   ? r.end_date.slice(0,10)   : '—') + '</td>' +
+        '<td class="text-muted">' + esc(r.assigned_name||'—') + '</td>' +
+        '<td><button class="btn-icon prm-del-btn" onclick="window._prmDelete(\'' + r.id + '\')" title="Delete">🗑</button></td>' +
       '</tr>';
     });
     html += '</tbody></table></div>';
@@ -1119,23 +1122,60 @@ function _prmListView(issues, groupBy) {
   return html + '</div>';
 }
 
+// ── Board (Kanban) View ──
+function _prmBoardView(items) {
+  var cols = [
+    { key:'planned',     label:'📋 Planned' },
+    { key:'in_progress', label:'🔄 In Progress' },
+    { key:'on_hold',     label:'⏸ On Hold' },
+    { key:'completed',   label:'✅ Completed' }
+  ];
+  var html = '<div class="prm-board">';
+  cols.forEach(function(col) {
+    var colItems = items.filter(function(r){ return (r.status||'planned') === col.key; });
+    html += '<div class="prm-board-col">' +
+      '<div class="prm-board-col-hdr" style="border-top:3px solid ' + _prmStatusColor(col.key) + '">' +
+        esc(col.label) + ' <span class="prm-list-count">' + colItems.length + '</span>' +
+      '</div>';
+    colItems.forEach(function(r) {
+      html += '<div class="prm-board-card" onclick="window._prmOpenModal(\'' + r.id + '\')">' +
+        '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">' +
+          '<span class="prm-color-dot" style="background:' + esc(r.color||'#4d90e0') + '"></span>' +
+          '<strong style="font-size:12px;flex:1">' + esc(r.title) + '</strong>' +
+        '</div>' +
+        (r.description ? '<p style="font-size:11px;color:var(--text3);margin:0 0 6px">' + esc(r.description.slice(0,80)) + '</p>' : '') +
+        '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:4px;margin-top:6px">' +
+          _prmPriorityBadge(r.priority) +
+          (r.space_name ? '<span style="font-size:10px;color:var(--text3)">' + esc(r.space_name) + '</span>' : '') +
+        '</div>' +
+        (r.start_date || r.end_date
+          ? '<div style="font-size:10px;color:var(--text3);margin-top:4px">📅 ' +
+              esc((r.start_date||'?').slice(0,10)) + ' → ' + esc((r.end_date||'?').slice(0,10)) + '</div>'
+          : '') +
+      '</div>';
+    });
+    html += '<button class="prm-board-add" onclick="window._prmOpenModal(null,\'' + col.key + '\')">＋ Add item</button>' +
+      '</div>';
+  });
+  return html + '</div>';
+}
+
 // ── Timeline (Gantt) View ──
-function _prmTimelineView(issues, groupBy, zoom) {
-  // Determine date range from issues (start_date / due_date)
+function _prmTimelineView(items, groupBy, zoom) {
   var today = new Date(); today.setHours(0,0,0,0);
   var minDate = new Date(today); minDate.setMonth(minDate.getMonth() - 1);
   var maxDate = new Date(today); maxDate.setMonth(maxDate.getMonth() + 6);
 
-  issues.forEach(function(iss) {
-    if (iss.start_date) { var d = new Date(iss.start_date); if (d < minDate) minDate = d; }
-    if (iss.due_date)   { var d = new Date(iss.due_date);   if (d > maxDate) maxDate = d; }
+  items.forEach(function(r) {
+    if (r.start_date) { var d = new Date(r.start_date); if (d < minDate) minDate = d; }
+    if (r.end_date)   { var d = new Date(r.end_date);   if (d > maxDate) maxDate = d; }
   });
 
   // Build time columns
   var cols = [], cur = new Date(minDate);
-  if (zoom === 'week')    { cur.setDate(cur.getDate() - cur.getDay() + 1); } // start Monday
-  else if (zoom === 'month')   { cur = new Date(cur.getFullYear(), cur.getMonth(), 1); }
-  else if (zoom === 'quarter') { var qm = Math.floor(cur.getMonth()/3)*3; cur = new Date(cur.getFullYear(), qm, 1); }
+  if (zoom === 'week')         cur.setDate(cur.getDate() - ((cur.getDay()+6)%7)); // Monday
+  else if (zoom === 'month')   cur = new Date(cur.getFullYear(), cur.getMonth(), 1);
+  else if (zoom === 'quarter') cur = new Date(cur.getFullYear(), Math.floor(cur.getMonth()/3)*3, 1);
 
   while (cur <= maxDate) {
     var label, next;
@@ -1143,77 +1183,182 @@ function _prmTimelineView(issues, groupBy, zoom) {
       label = String(cur.getDate()).padStart(2,'0') + '/' + String(cur.getMonth()+1).padStart(2,'0');
       next = new Date(cur); next.setDate(next.getDate() + 7);
     } else if (zoom === 'quarter') {
-      var qNames = ['Q1','Q2','Q3','Q4'];
-      label = qNames[Math.floor(cur.getMonth()/3)] + ' ' + cur.getFullYear();
+      label = ['Q1','Q2','Q3','Q4'][Math.floor(cur.getMonth()/3)] + ' ' + cur.getFullYear();
       next = new Date(cur); next.setMonth(next.getMonth() + 3);
     } else {
-      var mNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-      label = mNames[cur.getMonth()] + ' ' + cur.getFullYear();
+      label = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][cur.getMonth()] + ' ' + cur.getFullYear();
       next = new Date(cur); next.setMonth(next.getMonth() + 1);
     }
     cols.push({ start: new Date(cur), end: new Date(next), label: label });
     cur = next;
   }
-  if (!cols.length) return '<p class="text-muted placeholder-text">No timeline data available.</p>';
+  if (!cols.length) return '<p class="text-muted placeholder-text">No timeline data.</p>';
 
-  var totalSpan = (maxDate - minDate); // ms
-
+  var totalSpan = maxDate - minDate;
   function datePct(d) {
     if (!d) return null;
-    var dt = new Date(d);
-    return Math.max(0, Math.min(100, ((dt - minDate) / totalSpan) * 100));
+    return Math.max(0, Math.min(100, ((new Date(d) - minDate) / totalSpan) * 100));
   }
 
-  var g = _prmGroup(issues, groupBy);
-  var LABEL_COL = 220; // px
+  var g = _prmGroup(items, groupBy);
+  var LABEL_COL = 240;
 
   var html = '<div class="prm-timeline-wrap">' +
     '<div class="prm-tl-header" style="padding-left:' + LABEL_COL + 'px">';
-  // Column headers
   cols.forEach(function(col) {
-    var isToday = today >= col.start && today < col.end;
-    html += '<div class="prm-tl-col-hdr' + (isToday ? ' prm-tl-today-col' : '') + '">' + esc(col.label) + '</div>';
+    html += '<div class="prm-tl-col-hdr' + (today >= col.start && today < col.end ? ' prm-tl-today-col' : '') + '">' + esc(col.label) + '</div>';
   });
   html += '</div><div class="prm-tl-body">';
 
   g.order.forEach(function(gKey) {
     var rows = g.groups[gKey];
-    // Group header row
     html += '<div class="prm-tl-group-row">' +
-      '<div class="prm-tl-label prm-tl-group-label" style="width:' + LABEL_COL + 'px">' + esc(gKey) + ' <span class="prm-list-count">(' + rows.length + ')</span></div>' +
-      '<div class="prm-tl-bar-track"></div></div>';
+      '<div class="prm-tl-label prm-tl-group-label" style="width:' + LABEL_COL + 'px">' +
+        esc(gKey) + ' <span class="prm-list-count">(' + rows.length + ')</span>' +
+      '</div><div class="prm-tl-bar-track"></div></div>';
 
-    rows.forEach(function(iss) {
-      var startPct = datePct(iss.start_date);
-      var endPct   = datePct(iss.due_date);
-      var hasDates = startPct !== null || endPct !== null;
-      if (startPct === null) startPct = endPct !== null ? Math.max(0, endPct - 5) : 0;
-      if (endPct   === null) endPct   = Math.min(100, startPct + 5);
-      var width = Math.max(1, endPct - startPct);
-      var barColor = iss.type === 'epic' ? '#9b59b6' : iss.status === 'Done' ? 'var(--success)' : iss.status === 'In Progress' ? 'var(--accent)' : 'var(--text3)';
+    rows.forEach(function(r) {
+      var sp = datePct(r.start_date), ep = datePct(r.end_date);
+      var hasDates = sp !== null || ep !== null;
+      if (sp === null) sp = ep !== null ? Math.max(0, ep - 5) : 0;
+      if (ep === null) ep = Math.min(100, sp + 5);
+      var w = Math.max(1, ep - sp);
+      var barColor = r.color || _prmStatusColor(r.status);
 
-      html += '<div class="prm-tl-issue-row" onclick="openIssuePage(\'' + iss.id + '\')">' +
+      html += '<div class="prm-tl-issue-row" onclick="window._prmOpenModal(\'' + r.id + '\')">' +
         '<div class="prm-tl-label" style="width:' + LABEL_COL + 'px">' +
-          '<span class="prm-type-icon prm-type-' + (iss.type||'task') + '"></span>' +
-          '<span class="prm-issue-key">' + esc(iss.issue_key||'') + '</span> ' +
-          '<span class="prm-tl-issue-title">' + esc((iss.title||'').slice(0,30) + ((iss.title||'').length>30?'…':'')) + '</span>' +
+          '<span class="prm-color-dot" style="background:' + esc(r.color||'#4d90e0') + '"></span>' +
+          '<span class="prm-tl-issue-title">' + esc((r.title||'').slice(0,32) + (r.title&&r.title.length>32?'…':'')) + '</span>' +
+          (r.issue_key ? ' <span class="prm-issue-key" style="font-size:10px">' + esc(r.issue_key) + '</span>' : '') +
         '</div>' +
         '<div class="prm-tl-bar-track">' +
           (hasDates
-            ? '<div class="prm-tl-bar" style="left:' + startPct.toFixed(1) + '%;width:' + width.toFixed(1) + '%;background:' + barColor + '" title="' + esc((iss.start_date||'?').slice(0,10)) + ' → ' + esc((iss.due_date||'?').slice(0,10)) + '"></div>'
-            : '<div class="prm-tl-no-date">— no dates —</div>')
-          +
+            ? '<div class="prm-tl-bar" style="left:' + sp.toFixed(1) + '%;width:' + w.toFixed(1) + '%;background:' + barColor + '" title="' + esc((r.start_date||'?').slice(0,10)) + ' → ' + esc((r.end_date||'?').slice(0,10)) + '"><span class="prm-tl-bar-label">' + esc(r.title) + '</span></div>'
+            : '<span class="prm-tl-no-date">— no dates set —</span>') +
         '</div></div>';
     });
   });
 
-  // Today marker
   var todayPct = datePct(today.toISOString().slice(0,10));
-  html += '</div>' +
-    '<div class="prm-tl-today-marker" style="left:calc(' + LABEL_COL + 'px + ' + todayPct.toFixed(1) + '%)"></div>' +
-    '</div>';
+  html += '</div><div class="prm-tl-today-marker" style="left:calc(' + LABEL_COL + 'px + ' + todayPct.toFixed(1) + '%)"><span class="prm-tl-today-label">Today</span></div></div>';
   return html;
 }
+
+// ── Create / Edit Modal ──
+window._prmOpenModal = function(id, defaultStatus) {
+  var existing = id ? _prmData.find(function(r){ return r.id === id; }) : null;
+  var spaces = S.data.spaces || [];
+  var members = [];
+  (spaces).forEach(function(sp) {
+    if (sp.members) members = members.concat(sp.members);
+  });
+  // unique users
+  var usersMap = {};
+  (S.data.users || []).forEach(function(u){ usersMap[u.id] = u; });
+
+  var title = existing ? 'Edit Roadmap Item' : 'New Roadmap Item';
+  var v = existing || { status: defaultStatus || 'planned', priority: 'medium', color: '#4d90e0' };
+
+  var spaceOptions = '<option value="">— No Space —</option>' +
+    spaces.map(function(sp){ return '<option value="' + sp.id + '"' + (v.space_id == sp.id ? ' selected' : '') + '>' + esc(sp.name) + '</option>'; }).join('');
+
+  var userOptions = '<option value="">— Unassigned —</option>' +
+    Object.values(usersMap).map(function(u){ return '<option value="' + u.id + '"' + (v.assigned_to == u.id ? ' selected' : '') + '>' + esc(u.name) + '</option>'; }).join('');
+
+  var html = '<div class="modal-overlay" id="prmModalOverlay" onclick="if(event.target===this)window._prmCloseModal()">' +
+    '<div class="modal-box" style="max-width:520px">' +
+    '<div class="modal-header"><h3>' + title + '</h3><button class="btn-icon" onclick="window._prmCloseModal()">✕</button></div>' +
+    '<div class="modal-body" style="display:grid;gap:14px">' +
+      '<div><label class="form-label">Title *</label><input id="prmFTitle" class="input" value="' + esc(v.title||'') + '" placeholder="Roadmap item title"></div>' +
+      '<div><label class="form-label">Description</label><textarea id="prmFDesc" class="input" rows="2" placeholder="Optional description">' + esc(v.description||'') + '</textarea></div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">' +
+        '<div><label class="form-label">Status</label><select id="prmFStatus" class="input">' +
+          ['planned','in_progress','on_hold','completed'].map(function(s){ return '<option value="' + s + '"' + (v.status===s?' selected':'') + '>' + _prmStatusLabel(s) + '</option>'; }).join('') +
+        '</select></div>' +
+        '<div><label class="form-label">Priority</label><select id="prmFPriority" class="input">' +
+          ['low','medium','high','critical'].map(function(p){ return '<option value="' + p + '"' + (v.priority===p?' selected':'') + '>' + esc(p.charAt(0).toUpperCase()+p.slice(1)) + '</option>'; }).join('') +
+        '</select></div>' +
+      '</div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">' +
+        '<div><label class="form-label">Start Date</label><input id="prmFStart" type="date" class="input" value="' + esc(v.start_date ? v.start_date.slice(0,10) : '') + '"></div>' +
+        '<div><label class="form-label">End Date</label><input id="prmFEnd" type="date" class="input" value="' + esc(v.end_date ? v.end_date.slice(0,10) : '') + '"></div>' +
+      '</div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">' +
+        '<div><label class="form-label">Space</label><select id="prmFSpace" class="input">' + spaceOptions + '</select></div>' +
+        '<div><label class="form-label">Assignee</label><select id="prmFAssigned" class="input">' + userOptions + '</select></div>' +
+      '</div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">' +
+        '<div><label class="form-label">Color</label><input id="prmFColor" type="color" class="input" value="' + esc(v.color||'#4d90e0') + '" style="height:36px;padding:2px 6px"></div>' +
+        '<div><label class="form-label">Linked Issue Key (optional)</label><input id="prmFIssueKey" class="input" value="' + esc(v.issue_key||'') + '" placeholder="e.g. ENG-5"></div>' +
+      '</div>' +
+    '</div>' +
+    '<div class="modal-footer">' +
+      (existing ? '<button class="btn btn-danger btn-sm" onclick="window._prmDelete(\'' + id + '\')">🗑 Delete</button><span style="flex:1"></span>' : '<span style="flex:1"></span>') +
+      '<button class="btn btn-secondary btn-sm" onclick="window._prmCloseModal()">Cancel</button>' +
+      '<button class="btn btn-primary btn-sm" onclick="window._prmSave(\'' + (id||'') + '\')">💾 Save</button>' +
+    '</div></div></div>';
+
+  var el = document.createElement('div');
+  el.innerHTML = html;
+  document.body.appendChild(el.firstChild);
+};
+
+window._prmCloseModal = function() {
+  var m = $('prmModalOverlay'); if (m) m.remove();
+};
+
+window._prmSave = async function(id) {
+  var title = ($('prmFTitle')||{}).value || '';
+  if (!title.trim()) { toast('Title is required', 'error'); return; }
+
+  // Resolve issue_id from issue_key if provided
+  var issueKey = ($('prmFIssueKey')||{}).value.trim();
+  var issueId = null;
+  if (issueKey) {
+    // Search in all issues
+    var allIssues = [];
+    (S.data.spaces||[]).forEach(function(sp){ allIssues = allIssues.concat((sp.issues||[])); });
+    var found = allIssues.find(function(i){ return (i.issue_key||'').toLowerCase() === issueKey.toLowerCase(); });
+    if (found) issueId = found.id;
+  }
+
+  var payload = {
+    title:       title.trim(),
+    description: ($('prmFDesc')||{}).value || '',
+    status:      ($('prmFStatus')||{}).value || 'planned',
+    priority:    ($('prmFPriority')||{}).value || 'medium',
+    start_date:  ($('prmFStart')||{}).value || null,
+    end_date:    ($('prmFEnd')||{}).value   || null,
+    space_id:    ($('prmFSpace')||{}).value || null,
+    assigned_to: ($('prmFAssigned')||{}).value || null,
+    color:       ($('prmFColor')||{}).value || '#4d90e0',
+    issue_id:    issueId
+  };
+
+  try {
+    if (id) {
+      await api('/api/roadmap/' + id, 'PUT', payload);
+      toast('Roadmap item updated');
+    } else {
+      await api('/api/roadmap', 'POST', payload);
+      toast('Roadmap item created');
+    }
+    window._prmCloseModal();
+    await window._prmLoad();
+  } catch(e) {
+    toast('Failed to save: ' + (e.message||e), 'error');
+  }
+};
+
+window._prmDelete = async function(id) {
+  if (!confirm('Delete this roadmap item?')) return;
+  window._prmCloseModal();
+  try {
+    await api('/api/roadmap/' + id, 'DELETE');
+    toast('Deleted');
+    await window._prmLoad();
+  } catch(e) { toast('Delete failed', 'error'); }
+};
 
 // ═══════════════════════════════════════════════════════════
 async function _wlrFetch() {

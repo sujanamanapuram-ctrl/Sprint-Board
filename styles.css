@@ -2802,3 +2802,26 @@ body.light .aw-ms-panel { box-shadow: 0 4px 20px rgba(0,0,0,.10); }
 .prm-type-icon.prm-type-epic   { background: #9b59b6; border-radius: 50%; }
 .prm-type-icon.prm-type-bug    { background: #e74c3c; }
 .prm-type-icon.prm-type-story  { background: #3498db; }
+
+/* ── PRM additional ─────────────────────────────────────── */
+.prm-color-dot { display:inline-block;width:10px;height:10px;border-radius:50%;flex-shrink:0; }
+.prm-status-chip { display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;color:#fff; }
+.prm-item-title { cursor:pointer;display:flex;align-items:center;gap:6px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+.prm-item-title:hover { color:var(--accent); }
+.prm-del-btn { opacity:.4;font-size:13px; }
+.prm-del-btn:hover { opacity:1; }
+.prm-empty { display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:60px 20px;color:var(--text3); }
+
+/* Board view */
+.prm-board { display:grid;grid-template-columns:repeat(4,1fr);gap:16px;padding:4px;align-items:start; }
+@media(max-width:900px) { .prm-board { grid-template-columns:repeat(2,1fr); } }
+.prm-board-col { background:var(--bg3);border-radius:var(--radius);border:1px solid var(--border);min-height:200px; }
+.prm-board-col-hdr { padding:10px 14px 8px;font-weight:700;font-size:12px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between; }
+.prm-board-card { margin:8px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;cursor:pointer;transition:box-shadow .15s; }
+.prm-board-card:hover { box-shadow:0 2px 8px rgba(0,0,0,.12); }
+.prm-board-add { width:calc(100% - 16px);margin:6px 8px 8px;padding:6px;border:1px dashed var(--border);border-radius:var(--radius);background:none;color:var(--text3);cursor:pointer;font-size:12px;text-align:center; }
+.prm-board-add:hover { border-color:var(--accent);color:var(--accent); }
+
+/* Timeline enhancements */
+.prm-tl-bar-label { font-size:10px;color:#fff;padding:0 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;line-height:18px; }
+.prm-tl-today-label { position:absolute;top:-18px;left:50%;transform:translateX(-50%);font-size:10px;color:var(--danger,#e74c3c);font-weight:700;white-space:nowrap; }

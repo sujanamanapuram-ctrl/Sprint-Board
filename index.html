@@ -305,15 +305,19 @@
               <h1 class="view-title" style="margin:0">🗺️ Product Roadmap</h1>
               <div class="prm-view-toggle">
                 <button class="prm-vt-btn active" data-prm-view="timeline" onclick="window._prmSetView('timeline')">📅 Timeline</button>
-                <button class="prm-vt-btn" data-prm-view="list" onclick="window._prmSetView('list')">📋 List</button>
+                <button class="prm-vt-btn" data-prm-view="list"     onclick="window._prmSetView('list')">📋 List</button>
+                <button class="prm-vt-btn" data-prm-view="board"    onclick="window._prmSetView('board')">🗂 Board</button>
               </div>
             </div>
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+              <select id="prmFilterSpace" class="input input-sm" onchange="window._prmLoad()">
+                <option value="">All Spaces</option>
+              </select>
               <select id="prmGroupBy" class="input input-sm" onchange="window._prmRender()">
+                <option value="status">Group by Status</option>
                 <option value="space">Group by Space</option>
-                <option value="sprint">Group by Sprint</option>
                 <option value="priority">Group by Priority</option>
-                <option value="type">Group by Type</option>
+                <option value="assigned">Group by Assignee</option>
               </select>
               <select id="prmZoom" class="input input-sm" onchange="window._prmRender()">
                 <option value="month">Monthly</option>
@@ -322,19 +326,20 @@
               </select>
               <select id="prmFilterStatus" class="input input-sm" onchange="window._prmRender()">
                 <option value="">All Statuses</option>
-                <option value="To Do">To Do</option>
-                <option value="In Progress">In Progress</option>
-                <option value="In Review">In Review</option>
-                <option value="Done">Done</option>
+                <option value="planned">Planned</option>
+                <option value="in_progress">In Progress</option>
+                <option value="on_hold">On Hold</option>
+                <option value="completed">Completed</option>
               </select>
-              <select id="prmFilterType" class="input input-sm" onchange="window._prmRender()">
-                <option value="">All Types</option>
-                <option value="epic">Epic</option>
-                <option value="story">Story</option>
-                <option value="task">Task</option>
-                <option value="bug">Bug</option>
+              <select id="prmFilterPriority" class="input input-sm" onchange="window._prmRender()">
+                <option value="">All Priorities</option>
+                <option value="critical">Critical</option>
+                <option value="high">High</option>
+                <option value="medium">Medium</option>
+                <option value="low">Low</option>
               </select>
               <button class="btn btn-outline btn-sm" onclick="window._prmLoad()">↺ Refresh</button>
+              <button class="btn btn-primary btn-sm" onclick="window._prmOpenModal()">＋ Add Item</button>
             </div>
           </div>
           <div id="prmContent" class="prm-content"></div>

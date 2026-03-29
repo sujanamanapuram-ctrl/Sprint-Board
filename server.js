@@ -455,6 +455,55 @@ app.delete('/api/worklogs/:id', requireAuth, wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// ── Product Roadmap ───────────────────────────────────────
+app.get('/api/roadmap', requireAuth, wrap(async (req, res) => {
+  const { space_id, status } = req.query;
+  let sql = `SELECT r.*, u.name AS assigned_name, i.issue_key, i.title AS issue_title,
+               s.name AS space_name, cb.name AS created_by_name
+             FROM roadmap_items r
+             LEFT JOIN users u  ON u.id  = r.assigned_to
+             LEFT JOIN issues i ON i.id  = r.issue_id
+             LEFT JOIN spaces s ON s.id  = r.space_id
+             LEFT JOIN users cb ON cb.id = r.created_by
+             WHERE 1=1`;
+  const params = [];
+  if (space_id) { params.push(space_id); sql += ` AND r.space_id=$${params.length}`; }
+  if (status)   { params.push(status);   sql += ` AND r.status=$${params.length}`; }
+  sql += ' ORDER BY r.start_date ASC NULLS LAST, r.created_at ASC';
+  res.json((await q(sql, params)).rows);
+}));
+
+app.post('/api/roadmap', requireAuth, wrap(async (req, res) => {
+  const { title, description, status, start_date, end_date, space_id, issue_id, color, priority, assigned_to } = req.body;
+  if (!title) return res.status(400).json({ error: 'Title required' });
+  const id = 'rm_' + Date.now() + Math.random().toString(36).slice(2, 7);
+  const row = (await q(
+    `INSERT INTO roadmap_items (id,title,description,status,start_date,end_date,space_id,issue_id,color,priority,assigned_to,created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+    [id, title, description||null, status||'planned', start_date||null, end_date||null,
+     space_id||null, issue_id||null, color||'#4d90e0', priority||'medium', assigned_to||null, req.user.user_id]
+  )).rows[0];
+  res.json(row);
+}));
+
+app.put('/api/roadmap/:id', requireAuth, wrap(async (req, res) => {
+  const { title, description, status, start_date, end_date, space_id, issue_id, color, priority, assigned_to } = req.body;
+  const row = (await q(
+    `UPDATE roadmap_items SET title=$2,description=$3,status=$4,start_date=$5,end_date=$6,
+     space_id=$7,issue_id=$8,color=$9,priority=$10,assigned_to=$11,updated_at=NOW()
+     WHERE id=$1 RETURNING *`,
+    [req.params.id, title, description||null, status||'planned', start_date||null, end_date||null,
+     space_id||null, issue_id||null, color||'#4d90e0', priority||'medium', assigned_to||null]
+  )).rows[0];
+  if (!row) return res.status(404).json({ error: 'Not found' });
+  res.json(row);
+}));
+
+app.delete('/api/roadmap/:id', requireAuth, wrap(async (req, res) => {
+  await q('DELETE FROM roadmap_items WHERE id=$1', [req.params.id]);
+  res.json({ ok: true });
+}));
+
 // ── Issue Links ───────────────────────────────────────────
 app.post('/api/links', wrap(async (req, res) => {
   const { source_id, target_id, link_type } = req.body;
@@ -1122,6 +1171,26 @@ process.on('unhandledRejection', (reason) => {
       await pool.query(`UPDATE space_members SET role='site_admin' WHERE role='admin'`);
       await pool.query(`ALTER TABLE space_members ADD CONSTRAINT space_members_role_check CHECK (role IN ('site_admin','manager','member','viewer'))`);
     } catch(e) { console.error('Migration warning (space_members role):', e.message); }
+
+    // Migration: create roadmap_items table
+    try {
+      await pool.query(`CREATE TABLE IF NOT EXISTS roadmap_items (
+        id VARCHAR PRIMARY KEY,
+        title VARCHAR NOT NULL,
+        description TEXT,
+        status VARCHAR DEFAULT 'planned',
+        start_date DATE,
+        end_date DATE,
+        space_id VARCHAR REFERENCES spaces(id) ON DELETE SET NULL,
+        issue_id VARCHAR REFERENCES issues(id) ON DELETE SET NULL,
+        color VARCHAR DEFAULT '#4d90e0',
+        priority VARCHAR DEFAULT 'medium',
+        assigned_to VARCHAR REFERENCES users(id) ON DELETE SET NULL,
+        created_by VARCHAR REFERENCES users(id) ON DELETE SET NULL,
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW()
+      )`);
+    } catch(e) { console.error('Migration warning (roadmap_items):', e.message); }
 
     console.log('==================================================');
     console.log('  SprintBoard Server');

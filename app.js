@@ -1408,8 +1408,8 @@ var WLR_PIVOT_FIELDS = WLR_PIVOT_FIELDS_DEFAULT.slice();
 
 var _wlrPivotConfig = {
   rows:    ['user_name', 'issue_key'],
-  cols:    ['work_date'],
-  values:  ['time_spent'],   // drag 'Count of Worklogs' here to add count
+  cols:    [],               // no date columns by default; drag 'Date' here to expand
+  values:  ['time_spent'],
   filters: []
 };
 

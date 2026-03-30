@@ -4259,6 +4259,7 @@ async function openDrawer(issueId) {
   $('drawerType').className = 'badge badge-type badge-type-' + (issue.type || 'task');
   $('drawerTitle').textContent = issue.title || '';
   $('drawerDesc').textContent = issue.description || '';
+  $('drawerFixDesc').textContent = issue.fix_description || '';
 
   $('drawerStatus').value = issue.status || 'To Do';
   $('drawerPriority').value = issue.priority || 'medium';
@@ -4492,8 +4493,12 @@ function bindDrawerEdits(issue) {
     var title = $('drawerTitle').textContent.trim();
     if (title) autoSave('title', title);
   };
+
   $('drawerDesc').oninput = function () {
     autoSave('description', $('drawerDesc').textContent.trim());
+  };
+  $('drawerFixDesc').oninput = function () {
+    autoSave('fix_description', $('drawerFixDesc').textContent.trim());
   };
 
   // Expose pending to the global save handler (fallback)

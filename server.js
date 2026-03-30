@@ -357,7 +357,7 @@ app.put('/api/issues/:id', requireAuth, wrap(async (req, res) => {
   const set = keys.map((k, i) => `${k}=$${i + 2}`).join(',');
   const r = await q(`UPDATE issues SET ${set},updated_at=NOW() WHERE id=$1 RETURNING *`, [req.params.id, ...vals]);
   // Record history for each changed field
-  const TRACKED = ['title','status','priority','assignee_id','reporter_id','sprint_id','labels','story_points','start_date','due_date','description'];
+  const TRACKED = ['title','status','priority','assignee_id','reporter_id','sprint_id','labels','story_points','start_date','due_date','description','fix_description'];
   if (oldRow) {
     for (const key of keys) {
       if (!TRACKED.includes(key)) continue;
@@ -1367,6 +1367,11 @@ process.on('unhandledRejection', (reason) => {
     try {
       await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS theme VARCHAR DEFAULT 'dark'`);
     } catch(e) { console.error('Migration warning (user theme):', e.message); }
+
+    // Migration: add fix_description to issues
+    try {
+      await pool.query(`ALTER TABLE issues ADD COLUMN IF NOT EXISTS fix_description TEXT`);
+    } catch(e) { console.error('Migration warning (fix_description):', e.message); }
 
     console.log('==================================================');
     console.log('  SprintBoard Server');

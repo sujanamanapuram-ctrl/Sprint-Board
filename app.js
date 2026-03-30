@@ -361,27 +361,34 @@ function populateSprintSelect(sel, sprints, selectedId) {
 // THEME
 // ═══════════════════════════════════════════════════════════
 function initTheme() {
+  // Use localStorage as fast initial load; DB preference applied after login in init()
   var saved = localStorage.getItem('sb-theme') || 'dark';
-  applyTheme(saved);
-  $('themeToggle').addEventListener('click', toggleTheme);
-  $('themeToggleTop').addEventListener('click', toggleTheme);
+  applyTheme(saved, false);
+  if ($('themeToggle')) $('themeToggle').addEventListener('click', toggleTheme);
+  if ($('themeToggleTop')) $('themeToggleTop').addEventListener('click', toggleTheme);
 }
 
 function toggleTheme() {
   var isDark = !document.body.classList.contains('light');
-  applyTheme(isDark ? 'light' : 'dark');
+  applyTheme(isDark ? 'light' : 'dark', true);
 }
 
-function applyTheme(theme) {
+function applyTheme(theme, saveToDb) {
   if (theme === 'light') {
     document.body.classList.add('light');
   } else {
     document.body.classList.remove('light');
   }
   var icon = theme === 'light' ? '\uD83C\uDF19' : '\u2600\uFE0F';
-  $('themeToggle').textContent = icon;
-  $('themeToggleTop').textContent = icon;
+  if ($('themeToggle')) $('themeToggle').textContent = icon;
+  if ($('themeToggleTop')) $('themeToggleTop').textContent = icon;
   localStorage.setItem('sb-theme', theme);
+  // Persist to DB when user explicitly toggles
+  if (saveToDb && S.currentUser) {
+    api('/api/users/' + S.currentUser, 'PUT', { theme: theme }).then(function(u) {
+      if (u && S.currentUserObj) S.currentUserObj.theme = u.theme;
+    }).catch(function(){});
+  }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -408,6 +415,8 @@ async function init() {
     S.currentUser = me.id;
     S.currentUserObj = me;
     localStorage.setItem('sb-user', JSON.stringify(me));
+    // Apply DB-stored theme preference
+    if (me.theme) applyTheme(me.theme, false);
 
     var data = await api('/api/data');
     S.data = data;
@@ -540,6 +549,51 @@ function navigateTo(view) {
   else if (view === 'product-roadmap') renderProductRoadmap();
   else if (view === 'user-management') renderUserManagement();
   else if (view === 'settings') renderAdminSettings('org-general');
+  else if (view === 'global-reports') renderGlobalReports();
+}
+
+function renderGlobalReports() {
+  var sel = $('globalReportSpace');
+  if (!sel) return;
+  // Populate space selector
+  var spaces = S.data.spaces || [];
+  sel.innerHTML = spaces.map(function(sp) {
+    return '<option value="' + sp.id + '">' + esc(sp.name) + '</option>';
+  }).join('');
+
+  window._loadGlobalReport = async function() {
+    var spaceId = ($('globalReportSpace') || {}).value;
+    var type = ($('globalReportType') || {}).value || 'burndown';
+    var c = $('globalReportContent');
+    if (!c || !spaceId) return;
+    c.innerHTML = '<p class="text-muted">Loading\u2026</p>';
+    var prevSpace = S.currentSpace;
+    S.currentSpace = spaceId;
+    try {
+      if (type === 'burndown') {
+        var sprints = await api('/api/sprints?space_id=' + spaceId);
+        var target = sprints.find(function(sp){ return sp.status === 'active'; }) || sprints[sprints.length - 1];
+        if (!target) { c.innerHTML = '<p class="placeholder-text">No sprints found for this space.</p>'; S.currentSpace = prevSpace; return; }
+        var d = await api('/api/reports/sprint/' + target.id);
+        renderBurndownReport(c, d, sprints);
+      } else if (type === 'velocity') {
+        var d2 = await api('/api/reports/velocity?space_id=' + spaceId);
+        renderVelocityReport(c, d2);
+      } else if (type === 'cumulative') {
+        var d3 = await api('/api/reports/status?space_id=' + spaceId);
+        renderCumulativeReport(c, d3);
+      } else if (type === 'control') {
+        var d4 = await api('/api/reports/cycle-time?space_id=' + spaceId);
+        renderControlChart(c, d4);
+      }
+    } catch(e) {
+      c.innerHTML = '<p class="text-muted">Failed to load: ' + esc(e.message) + '</p>';
+    } finally {
+      S.currentSpace = prevSpace;
+    }
+  };
+
+  window._loadGlobalReport();
 }
 
 function navigateToSpace(spaceId, tab) {
@@ -1031,12 +1085,58 @@ window._prmLoad = async function() {
     var params = [];
     var spaceFilter = ($('prmFilterSpace') || {}).value || '';
     if (spaceFilter) params.push('space_id=' + encodeURIComponent(spaceFilter));
-    _prmData = await api('/api/roadmap' + (params.length ? '?' + params.join('&') : ''));
+    var raw = await fetch('/api/roadmap' + (params.length ? '?' + params.join('&') : ''), {
+      headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('sb-token') || '') }
+    });
+    if (!raw.ok) {
+      var errBody; try { errBody = await raw.json(); } catch(_) { errBody = {}; }
+      throw new Error(errBody.error || ('HTTP ' + raw.status));
+    }
+    _prmData = await raw.json();
+    // Load group/category colors from DB
+    try {
+      var colorsRes = await fetch('/api/roadmap/colors', { headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('sb-token') || '') } });
+      if (colorsRes.ok) {
+        var dbColors = await colorsRes.json();
+        // Merge DB colors into localStorage cache for fast re-renders
+        var lcColors = JSON.parse(localStorage.getItem('prm_gc_colors') || '{}');
+        Object.assign(lcColors, dbColors);
+        localStorage.setItem('prm_gc_colors', JSON.stringify(lcColors));
+      }
+    } catch(_) {}
+    _prmPopulateYears();
     _prmRender();
   } catch(e) {
-    if (content) content.innerHTML = '<p class="text-muted" style="padding:24px">Failed to load roadmap data.</p>';
+    console.error('[Roadmap] load error:', e);
+    if (content) content.innerHTML =
+      '<div style="padding:24px">' +
+      '<p class="text-muted" style="margin-bottom:8px">⚠ Failed to load roadmap data.</p>' +
+      '<p style="font-size:11px;color:var(--danger,#e74c3c);font-family:monospace">' + esc(e.message||String(e)) + '</p>' +
+      '<p style="font-size:11px;color:var(--text3);margin-top:8px">Try restarting the server so the DB migration runs, then refresh.</p>' +
+      '<button class="btn btn-secondary btn-sm" style="margin-top:10px" onclick="window._prmLoad()">↺ Retry</button>' +
+      '</div>';
   }
 };
+
+function _prmPopulateYears() {
+  var sel = $('prmFilterYear');
+  if (!sel) return;
+  var thisYear = new Date().getFullYear();
+  // Collect years from data + always include current year ± 2
+  var ySet = {};
+  _prmData.forEach(function(r) {
+    if (r.start_date) ySet[new Date(r.start_date).getFullYear()] = 1;
+    if (r.end_date)   ySet[new Date(r.end_date).getFullYear()]   = 1;
+  });
+  for (var y = thisYear - 5; y <= thisYear + 10; y++) ySet[y] = 1;
+  var years = Object.keys(ySet).map(Number).sort();
+  var prev = sel.value;
+  sel.innerHTML = '<option value="">All Years</option>' +
+    years.map(function(y) {
+      return '<option value="' + y + '">' + y + '</option>';
+    }).join('');
+  if (prev && ySet[prev]) sel.value = prev; // restore previous selection
+}
 
 window._prmRender = function() {
   var content = $('prmContent');
@@ -1045,9 +1145,18 @@ window._prmRender = function() {
   // Apply client-side filters
   var fStatus   = ($('prmFilterStatus')   || {}).value || '';
   var fPriority = ($('prmFilterPriority') || {}).value || '';
+  var fYear     = parseInt(($('prmFilterYear') || {}).value || '') || 0;
   var items = _prmData.filter(function(r) {
     if (fStatus   && r.status   !== fStatus)   return false;
     if (fPriority && r.priority !== fPriority) return false;
+    if (fYear) {
+      // Include item if it overlaps with the selected year at all
+      var sd = r.start_date ? new Date(r.start_date).getFullYear() : null;
+      var ed = r.end_date   ? new Date(r.end_date).getFullYear()   : null;
+      var minY = Math.min(sd || fYear, ed || fYear);
+      var maxY = Math.max(sd || fYear, ed || fYear);
+      if (minY > fYear || maxY < fYear) return false;
+    }
     return true;
   });
 
@@ -1062,7 +1171,7 @@ window._prmRender = function() {
 
   if      (_prmView === 'list')     content.innerHTML = _prmListView(items, groupBy);
   else if (_prmView === 'board')    content.innerHTML = _prmBoardView(items);
-  else                              content.innerHTML = _prmTimelineView(items, groupBy, zoom);
+  else                              content.innerHTML = _prmTimelineView(items, groupBy, zoom, fYear || null);
 };
 
 // ── Helpers ──
@@ -1114,7 +1223,10 @@ function _prmListView(items, groupBy) {
         '<td class="text-muted">' + esc(r.start_date ? r.start_date.slice(0,10) : '—') + '</td>' +
         '<td class="text-muted">' + esc(r.end_date   ? r.end_date.slice(0,10)   : '—') + '</td>' +
         '<td class="text-muted">' + esc(r.assigned_name||'—') + '</td>' +
-        '<td><button class="btn-icon prm-del-btn" onclick="window._prmDelete(\'' + r.id + '\')" title="Delete">🗑</button></td>' +
+        '<td style="white-space:nowrap">' +
+          '<button class="btn-icon prm-edit-btn" onclick="window._prmOpenModal(\'' + r.id + '\')" title="Edit">✏</button>' +
+          '<button class="btn-icon prm-del-btn"  onclick="window._prmDelete(\'' + r.id + '\')" title="Delete">🗑</button>' +
+        '</td>' +
       '</tr>';
     });
     html += '</tbody></table></div>';
@@ -1125,122 +1237,268 @@ function _prmListView(items, groupBy) {
 // ── Board (Kanban) View ──
 function _prmBoardView(items) {
   var cols = [
-    { key:'planned',     label:'📋 Planned' },
-    { key:'in_progress', label:'🔄 In Progress' },
-    { key:'on_hold',     label:'⏸ On Hold' },
-    { key:'completed',   label:'✅ Completed' }
+    { key:'planned',     label:'Planned',     icon:'📋', accent:'#607D8B' },
+    { key:'in_progress', label:'In Progress', icon:'🔄', accent:'#2196F3' },
+    { key:'on_hold',     label:'On Hold',     icon:'⏸', accent:'#FF9800' },
+    { key:'completed',   label:'Completed',   icon:'✅', accent:'#4CAF50' }
   ];
   var html = '<div class="prm-board">';
   cols.forEach(function(col) {
     var colItems = items.filter(function(r){ return (r.status||'planned') === col.key; });
     html += '<div class="prm-board-col">' +
-      '<div class="prm-board-col-hdr" style="border-top:3px solid ' + _prmStatusColor(col.key) + '">' +
-        esc(col.label) + ' <span class="prm-list-count">' + colItems.length + '</span>' +
-      '</div>';
+      '<div class="prm-board-col-hdr" style="border-top:3px solid ' + col.accent + ';background:' + col.accent + '14">' +
+        '<span style="display:flex;align-items:center;gap:6px">' +
+          '<span style="font-size:15px">' + col.icon + '</span>' +
+          '<span style="font-size:12px;font-weight:700;color:var(--text)">' + esc(col.label) + '</span>' +
+        '</span>' +
+        '<span class="prm-board-col-count" style="background:' + col.accent + '">' + colItems.length + '</span>' +
+      '</div><div class="prm-board-col-body">';
+    if (!colItems.length) {
+      html += '<div class="prm-board-empty">No items</div>';
+    }
     colItems.forEach(function(r) {
+      var initials = (r.assigned_name || '').split(' ').map(function(w){ return w[0]; }).join('').slice(0,2).toUpperCase() || '?';
       html += '<div class="prm-board-card" onclick="window._prmOpenModal(\'' + r.id + '\')">' +
-        '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">' +
-          '<span class="prm-color-dot" style="background:' + esc(r.color||'#4d90e0') + '"></span>' +
-          '<strong style="font-size:12px;flex:1">' + esc(r.title) + '</strong>' +
-        '</div>' +
-        (r.description ? '<p style="font-size:11px;color:var(--text3);margin:0 0 6px">' + esc(r.description.slice(0,80)) + '</p>' : '') +
-        '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:4px;margin-top:6px">' +
-          _prmPriorityBadge(r.priority) +
-          (r.space_name ? '<span style="font-size:10px;color:var(--text3)">' + esc(r.space_name) + '</span>' : '') +
-        '</div>' +
-        (r.start_date || r.end_date
-          ? '<div style="font-size:10px;color:var(--text3);margin-top:4px">📅 ' +
-              esc((r.start_date||'?').slice(0,10)) + ' → ' + esc((r.end_date||'?').slice(0,10)) + '</div>'
-          : '') +
-      '</div>';
+        '<div class="prm-bc-color-bar" style="background:' + esc(r.color||col.accent) + '"></div>' +
+        '<div class="prm-bc-body">' +
+          '<div class="prm-bc-title">' + esc(r.title) + '</div>' +
+          (r.description ? '<div class="prm-bc-desc">' + esc(r.description.slice(0,100)) + '</div>' : '') +
+          '<div class="prm-bc-footer">' +
+            _prmPriorityBadge(r.priority) +
+            (r.space_name ? '<span class="prm-bc-space">' + esc(r.space_name) + '</span>' : '') +
+            (r.assigned_name
+              ? '<span class="prm-bc-avatar" title="' + esc(r.assigned_name) + '">' + esc(initials) + '</span>'
+              : '') +
+          '</div>' +
+          (r.start_date || r.end_date
+            ? '<div class="prm-bc-dates">📅 ' + esc((r.start_date||'—').slice(0,10)) + ' → ' + esc((r.end_date||'—').slice(0,10)) + '</div>'
+            : '') +
+        '</div></div>';
     });
-    html += '<button class="prm-board-add" onclick="window._prmOpenModal(null,\'' + col.key + '\')">＋ Add item</button>' +
+    html += '</div>' +
+      '<button class="prm-board-add" onclick="window._prmOpenModal(null,\'' + col.key + '\')">＋ Add item</button>' +
       '</div>';
   });
   return html + '</div>';
 }
 
-// ── Timeline (Gantt) View ──
-function _prmTimelineView(items, groupBy, zoom) {
+// ── Timeline (Gantt) View — Swim-lane style ──
+function _prmTimelineView(items, groupBy, zoom, fixedYear) {
   var today = new Date(); today.setHours(0,0,0,0);
-  var minDate = new Date(today); minDate.setMonth(minDate.getMonth() - 1);
-  var maxDate = new Date(today); maxDate.setMonth(maxDate.getMonth() + 6);
+  var MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
+  // Determine year range — locked to fixedYear if provided, otherwise from items
+  var minYear, maxYear;
+  if (fixedYear) {
+    minYear = maxYear = fixedYear;
+  } else {
+    minYear = maxYear = today.getFullYear();
+    items.forEach(function(r) {
+      if (r.start_date) { var y = new Date(r.start_date).getFullYear(); if (y < minYear) minYear = y; if (y > maxYear) maxYear = y; }
+      if (r.end_date)   { var y = new Date(r.end_date).getFullYear();   if (y < minYear) minYear = y; if (y > maxYear) maxYear = y; }
+    });
+  }
+
+  // Build monthly columns
+  var months = [];
+  var cur = new Date(minYear, 0, 1);
+  var maxEnd = new Date(maxYear, 11, 31, 23, 59, 59, 999);
+  while (cur <= maxEnd) {
+    var mStart = new Date(cur.getFullYear(), cur.getMonth(), 1);
+    var mEnd   = new Date(cur.getFullYear(), cur.getMonth() + 1, 1);
+    months.push({
+      year: cur.getFullYear(),
+      q:    Math.floor(cur.getMonth() / 3) + 1,
+      month: cur.getMonth(),
+      label: MONTH_NAMES[cur.getMonth()],
+      start: mStart,
+      end:   mEnd
+    });
+    cur = new Date(cur.getFullYear(), cur.getMonth() + 1, 1);
+  }
+  if (!months.length) return '<p class="text-muted placeholder-text">No timeline data.</p>';
+
+  // Year → month count (for colspan on year header)
+  var yearMonths = {}, yearOrder = [];
+  months.forEach(function(m) {
+    if (!yearMonths[m.year]) { yearMonths[m.year] = 0; yearOrder.push(m.year); }
+    yearMonths[m.year]++;
+  });
+
+  // Quarter key → month count (for colspan on quarter header)
+  var qtrMonths = {}, qtrOrder = [];
+  months.forEach(function(m) {
+    var qk = m.year + '-Q' + m.q;
+    if (!qtrMonths[qk]) { qtrMonths[qk] = 0; qtrOrder.push(qk); }
+    qtrMonths[qk]++;
+  });
+  var todayQKey = today.getFullYear() + '-Q' + (Math.floor(today.getMonth() / 3) + 1);
+
+  // Load persisted group/category colors from localStorage
+  var _gcColors = JSON.parse(localStorage.getItem('prm_gc_colors') || '{}');
+
+  // Build group_name → { color, catNames[], catMap{} }
+  var GROUP_COLORS = ['#4CAF50','#2196F3','#FF9800','#9C27B0','#F44336','#00BCD4','#795548','#607D8B'];
+  var groupNames = [], groupMap = {};
   items.forEach(function(r) {
-    if (r.start_date) { var d = new Date(r.start_date); if (d < minDate) minDate = d; }
-    if (r.end_date)   { var d = new Date(r.end_date);   if (d > maxDate) maxDate = d; }
-  });
-
-  // Build time columns
-  var cols = [], cur = new Date(minDate);
-  if (zoom === 'week')         cur.setDate(cur.getDate() - ((cur.getDay()+6)%7)); // Monday
-  else if (zoom === 'month')   cur = new Date(cur.getFullYear(), cur.getMonth(), 1);
-  else if (zoom === 'quarter') cur = new Date(cur.getFullYear(), Math.floor(cur.getMonth()/3)*3, 1);
-
-  while (cur <= maxDate) {
-    var label, next;
-    if (zoom === 'week') {
-      label = String(cur.getDate()).padStart(2,'0') + '/' + String(cur.getMonth()+1).padStart(2,'0');
-      next = new Date(cur); next.setDate(next.getDate() + 7);
-    } else if (zoom === 'quarter') {
-      label = ['Q1','Q2','Q3','Q4'][Math.floor(cur.getMonth()/3)] + ' ' + cur.getFullYear();
-      next = new Date(cur); next.setMonth(next.getMonth() + 3);
-    } else {
-      label = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][cur.getMonth()] + ' ' + cur.getFullYear();
-      next = new Date(cur); next.setMonth(next.getMonth() + 1);
+    var gn = (r.group_name || 'General').trim();
+    var cn = (r.category   || 'Items').trim();
+    if (!groupMap[gn]) {
+      var autoColor = GROUP_COLORS[groupNames.length % GROUP_COLORS.length];
+      groupMap[gn] = { catNames: [], catMap: {}, color: _gcColors['g:' + gn] || autoColor };
+      groupNames.push(gn);
     }
-    cols.push({ start: new Date(cur), end: new Date(next), label: label });
-    cur = next;
-  }
-  if (!cols.length) return '<p class="text-muted placeholder-text">No timeline data.</p>';
-
-  var totalSpan = maxDate - minDate;
-  function datePct(d) {
-    if (!d) return null;
-    return Math.max(0, Math.min(100, ((new Date(d) - minDate) / totalSpan) * 100));
-  }
-
-  var g = _prmGroup(items, groupBy);
-  var LABEL_COL = 240;
-
-  var html = '<div class="prm-timeline-wrap">' +
-    '<div class="prm-tl-header" style="padding-left:' + LABEL_COL + 'px">';
-  cols.forEach(function(col) {
-    html += '<div class="prm-tl-col-hdr' + (today >= col.start && today < col.end ? ' prm-tl-today-col' : '') + '">' + esc(col.label) + '</div>';
+    var gd = groupMap[gn];
+    if (!gd.catMap[cn]) { gd.catMap[cn] = []; gd.catNames.push(cn); }
+    gd.catMap[cn].push(r);
   });
-  html += '</div><div class="prm-tl-body">';
 
-  g.order.forEach(function(gKey) {
-    var rows = g.groups[gKey];
-    html += '<div class="prm-tl-group-row">' +
-      '<div class="prm-tl-label prm-tl-group-label" style="width:' + LABEL_COL + 'px">' +
-        esc(gKey) + ' <span class="prm-list-count">(' + rows.length + ')</span>' +
-      '</div><div class="prm-tl-bar-track"></div></div>';
+  if (!groupNames.length) {
+    return '<div class="prm-empty"><p class="text-muted">No roadmap items to display.</p>' +
+      '<button class="btn btn-primary btn-sm" onclick="window._prmOpenModal()">＋ Add First Item</button></div>';
+  }
 
-    rows.forEach(function(r) {
-      var sp = datePct(r.start_date), ep = datePct(r.end_date);
-      var hasDates = sp !== null || ep !== null;
-      if (sp === null) sp = ep !== null ? Math.max(0, ep - 5) : 0;
-      if (ep === null) ep = Math.min(100, sp + 5);
-      var w = Math.max(1, ep - sp);
-      var barColor = r.color || _prmStatusColor(r.status);
+  var html = '<div class="prm-swimlane-wrap"><div class="prm-sl-scroll">';
+  html += '<table class="prm-sl-table" cellspacing="0" cellpadding="0"><thead>';
 
-      html += '<div class="prm-tl-issue-row" onclick="window._prmOpenModal(\'' + r.id + '\')">' +
-        '<div class="prm-tl-label" style="width:' + LABEL_COL + 'px">' +
-          '<span class="prm-color-dot" style="background:' + esc(r.color||'#4d90e0') + '"></span>' +
-          '<span class="prm-tl-issue-title">' + esc((r.title||'').slice(0,32) + (r.title&&r.title.length>32?'…':'')) + '</span>' +
-          (r.issue_key ? ' <span class="prm-issue-key" style="font-size:10px">' + esc(r.issue_key) + '</span>' : '') +
+  // Row 1: Year headers — corner spans rows 1 & 2 (year + quarter)
+  html += '<tr class="prm-sl-yr-row"><th class="prm-sl-corner-top" colspan="2" rowspan="2"></th>';
+  yearOrder.forEach(function(y) {
+    html += '<th class="prm-sl-year-th" colspan="' + yearMonths[y] + '">' + y + '</th>';
+  });
+  html += '</tr>';
+
+  // Row 2: Quarter headers (no group/cat — covered by rowspan above)
+  html += '<tr class="prm-sl-qtr-row">';
+  qtrOrder.forEach(function(qk) {
+    var qLabel = qk.split('-')[1]; // 'Q1','Q2'...
+    var isCurQ = qk === todayQKey;
+    html += '<th class="prm-sl-hdr-q' + (isCurQ ? ' prm-sl-q-active' : '') + '" colspan="' + qtrMonths[qk] + '">' + qLabel + '</th>';
+  });
+  html += '</tr>';
+
+  // Row 3: Month headers (Group + Category + month cells)
+  html += '<tr class="prm-sl-mo-row"><th class="prm-sl-hdr-group">Group</th><th class="prm-sl-hdr-cat">Category</th>';
+  months.forEach(function(m) {
+    var isCurMo = today.getFullYear() === m.year && today.getMonth() === m.month;
+    html += '<th class="prm-sl-hdr-mo' + (isCurMo ? ' prm-sl-mo-active' : '') + '">' + m.label + '</th>';
+  });
+  html += '</tr></thead><tbody>';
+
+  // Body rows
+  groupNames.forEach(function(gn) {
+    var gd = groupMap[gn];
+    var gc = gd.color;
+
+    gd.catNames.forEach(function(cn, ci) {
+      var catItems = gd.catMap[cn];
+      var laneH = Math.max(40, catItems.length * 30 + 10);
+
+      html += '<tr class="prm-sl-body-row">';
+
+      // Group cell — rowspan across all categories in this group
+      if (ci === 0) {
+        html += '<td class="prm-sl-group-td" rowspan="' + gd.catNames.length + '" ' +
+          'style="border-left:4px solid ' + gc + ';background:' + gc + '1a" ' +
+          'title="Click to change group color" onclick="event.stopPropagation();window._prmPickColor(\'g:' + esc(gn) + '\',\'' + gc + '\',event)">' +
+          '<span class="prm-sl-group-txt">' + esc(gn.toUpperCase()) + '</span>' +
+          '<span class="prm-sl-color-hint">🎨</span></td>';
+      }
+
+      // Category label cell — same style as group (border-left + bg tint, full height)
+      var catColorKey = 'c:' + gn + ':' + cn;
+      var catColor = _gcColors[catColorKey] || gc;
+      html += '<td class="prm-sl-cat-td" ' +
+        'style="border-left:4px solid ' + catColor + ';background:' + catColor + '1a">' +
+        '<div class="prm-sl-cat-inner" style="height:' + laneH + 'px">' +
+        '<div class="prm-sl-cat-label" ' +
+          'style="cursor:pointer" ' +
+          'onclick="event.stopPropagation();window._prmPickColor(\'' + esc(catColorKey) + '\',\'' + catColor + '\',event)" ' +
+          'title="Click to change category color">' +
+          esc(cn) +
+          '<span class="prm-sl-color-hint">🎨</span>' +
         '</div>' +
-        '<div class="prm-tl-bar-track">' +
-          (hasDates
-            ? '<div class="prm-tl-bar" style="left:' + sp.toFixed(1) + '%;width:' + w.toFixed(1) + '%;background:' + barColor + '" title="' + esc((r.start_date||'?').slice(0,10)) + ' → ' + esc((r.end_date||'?').slice(0,10)) + '"><span class="prm-tl-bar-label">' + esc(r.title) + '</span></div>'
-            : '<span class="prm-tl-no-date">— no dates set —</span>') +
-        '</div></div>';
+        catItems.map(function(r) {
+          return '<div class="prm-sl-item-dot" onclick="window._prmOpenModal(\'' + r.id + '\')" title="' + esc(r.title) + '">' +
+            '<span class="prm-sl-dot-icon">✏</span>' +
+          '</div>';
+        }).join('') +
+        '</div>' +
+      '</td>';
+
+      // Single spanning timeline cell — bars sized by total timeline width
+      var totalStart = months[0].start;
+      var totalEnd   = months[months.length - 1].end;
+      var totalMs    = totalEnd - totalStart;
+
+      html += '<td class="prm-sl-tl-all" colspan="' + months.length + '" style="height:' + laneH + 'px">';
+
+      // Current month highlight
+      months.forEach(function(m) {
+        if (today.getFullYear() === m.year && today.getMonth() === m.month) {
+          var ml = ((m.start - totalStart) / totalMs) * 100;
+          var mw = ((m.end - m.start) / totalMs) * 100;
+          html += '<div class="prm-sl-cur-mo-bg" style="left:' + ml.toFixed(3) + '%;width:' + mw.toFixed(3) + '%"></div>';
+        }
+      });
+
+      // Month divider lines
+      months.forEach(function(m, mi) {
+        if (mi === 0) return;
+        var dp = ((m.start - totalStart) / totalMs) * 100;
+        html += '<div class="prm-sl-mo-div" style="left:' + dp.toFixed(3) + '%"></div>';
+      });
+
+      // Today marker
+      if (today >= totalStart && today < totalEnd) {
+        var tp = ((today - totalStart) / totalMs) * 100;
+        html += '<div class="prm-sl-today" style="left:' + tp.toFixed(3) + '%"></div>';
+      }
+
+      // Item bars — positioned across full timeline width
+      catItems.forEach(function(r, ri) {
+        var sd = r.start_date ? new Date(r.start_date) : null;
+        var ed = r.end_date   ? new Date(r.end_date)   : null;
+        if (!sd && !ed) return;
+        var rStart = sd || ed, rEnd = ed || sd;
+        rStart.setHours(0,0,0,0); rEnd.setHours(23,59,59,999);
+        if (rEnd <= totalStart || rStart >= totalEnd) return;
+
+        var cStart = rStart < totalStart ? totalStart : rStart;
+        var cEnd   = rEnd   > totalEnd   ? totalEnd   : rEnd;
+        var lp = ((cStart - totalStart) / totalMs) * 100;
+        var wp = Math.max(((cEnd - cStart) / totalMs) * 100, 0.4);
+        var bc = r.color || _prmStatusColor(r.status);
+        var topPx = ri * 30 + 4;
+
+        var tipData = encodeURIComponent(JSON.stringify({
+          title: r.title, status: r.status, priority: r.priority,
+          desc: r.description, sd: (r.start_date||'').slice(0,10), ed: (r.end_date||'').slice(0,10),
+          who: r.assigned_name
+        }));
+
+        if (r.milestone) {
+          html += '<div class="prm-sl-milestone" style="left:' + lp.toFixed(3) + '%;top:' + topPx + 'px;color:' + bc + '" ' +
+            'onclick="event.stopPropagation();window._prmOpenModal(\'' + r.id + '\')" ' +
+            'onmouseenter="window._prmShowTip(\'' + tipData + '\',event)" onmouseleave="window._prmHideTip()">◆</div>';
+        } else {
+          html += '<div class="prm-sl-bar-wrap" style="left:' + lp.toFixed(3) + '%;top:' + topPx + 'px;width:calc(' + wp.toFixed(3) + '% + 220px)">' +
+            '<div class="prm-sl-bar" style="width:' + wp.toFixed(3) + '%;background:' + bc + '" ' +
+            'onclick="event.stopPropagation();window._prmOpenModal(\'' + r.id + '\')" ' +
+            'onmouseenter="window._prmShowTip(\'' + tipData + '\',event)" onmouseleave="window._prmHideTip()">' +
+            '</div>' +
+            '<span class="prm-sl-bar-ext-lbl">' + esc(r.title) + '</span>' +
+            '</div>';
+        }
+      });
+
+      html += '</td>';
+
+      html += '</tr>';
     });
   });
 
-  var todayPct = datePct(today.toISOString().slice(0,10));
-  html += '</div><div class="prm-tl-today-marker" style="left:calc(' + LABEL_COL + 'px + ' + todayPct.toFixed(1) + '%)"><span class="prm-tl-today-label">Today</span></div></div>';
+  html += '</tbody></table></div></div>';
   return html;
 }
 
@@ -1288,8 +1546,16 @@ window._prmOpenModal = function(id, defaultStatus) {
         '<div><label class="form-label">Assignee</label><select id="prmFAssigned" class="input">' + userOptions + '</select></div>' +
       '</div>' +
       '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">' +
+        '<div><label class="form-label">Group Name</label><input id="prmFGroup" class="input" value="' + esc(v.group_name||'') + '" placeholder="e.g. Sales, Product"></div>' +
+        '<div><label class="form-label">Category</label><input id="prmFCat" class="input" value="' + esc(v.category||'') + '" placeholder="e.g. Strategy, Dev"></div>' +
+      '</div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">' +
         '<div><label class="form-label">Color</label><input id="prmFColor" type="color" class="input" value="' + esc(v.color||'#4d90e0') + '" style="height:36px;padding:2px 6px"></div>' +
         '<div><label class="form-label">Linked Issue Key (optional)</label><input id="prmFIssueKey" class="input" value="' + esc(v.issue_key||'') + '" placeholder="e.g. ENG-5"></div>' +
+      '</div>' +
+      '<div style="display:flex;align-items:center;gap:8px">' +
+        '<input id="prmFMilestone" type="checkbox"' + (v.milestone ? ' checked' : '') + ' style="width:16px;height:16px;cursor:pointer">' +
+        '<label for="prmFMilestone" class="form-label" style="margin:0;cursor:pointer">◆ Mark as Milestone (shown as diamond on timeline)</label>' +
       '</div>' +
     '</div>' +
     '<div class="modal-footer">' +
@@ -1332,7 +1598,10 @@ window._prmSave = async function(id) {
     space_id:    ($('prmFSpace')||{}).value || null,
     assigned_to: ($('prmFAssigned')||{}).value || null,
     color:       ($('prmFColor')||{}).value || '#4d90e0',
-    issue_id:    issueId
+    issue_id:    issueId,
+    group_name:  ($('prmFGroup')||{}).value.trim() || 'General',
+    category:    ($('prmFCat')||{}).value.trim()   || 'Items',
+    milestone:   !!($('prmFMilestone')||{}).checked
   };
 
   try {
@@ -1348,6 +1617,126 @@ window._prmSave = async function(id) {
   } catch(e) {
     toast('Failed to save: ' + (e.message||e), 'error');
   }
+};
+
+// ── Fullscreen Toggle ──
+window._prmToggleFullscreen = function() {
+  var view = document.getElementById('view-product-roadmap');
+  var btn  = document.getElementById('prmFullscreenBtn');
+  var isFs = view.classList.toggle('prm-fullscreen');
+  btn.textContent = isFs ? '✕ Exit Fullscreen' : '⛶ Fullscreen';
+  // ESC to exit
+  if (isFs) {
+    document.addEventListener('keydown', function _escFs(e) {
+      if (e.key === 'Escape') { view.classList.remove('prm-fullscreen'); btn.textContent = '⛶ Fullscreen'; document.removeEventListener('keydown', _escFs); }
+    });
+  }
+};
+
+// ── Bar Hover Tooltip ──
+(function() {
+  var tip = null;
+  function ensureTip() {
+    if (!tip) { tip = document.createElement('div'); tip.id = 'prm-bar-tip'; tip.className = 'prm-bar-tip'; document.body.appendChild(tip); }
+    return tip;
+  }
+  window._prmShowTip = function(data, evt) {
+    var d = JSON.parse(decodeURIComponent(data));
+    var t = ensureTip();
+    var statusColors = { planned:'#607D8B', in_progress:'#2196F3', on_hold:'#FF9800', completed:'#4CAF50' };
+    var sc = statusColors[d.status] || '#607D8B';
+    var priorityIcon = { critical:'🔴', high:'🟠', medium:'🟡', low:'🟢', lowest:'⚪' };
+    t.innerHTML =
+      '<div class="prm-tip-title">' + _esc(d.title) + '</div>' +
+      '<div class="prm-tip-row">' +
+        '<span class="prm-tip-chip" style="background:' + sc + '">' + (d.status||'—').replace(/_/g,' ') + '</span>' +
+        (d.priority ? '<span class="prm-tip-pri">' + (priorityIcon[d.priority]||'') + ' ' + _esc(d.priority) + '</span>' : '') +
+      '</div>' +
+      (d.desc ? '<div class="prm-tip-desc">' + _esc(d.desc) + '</div>' : '') +
+      '<div class="prm-tip-dates">📅 ' + (d.sd||'—') + ' &rarr; ' + (d.ed||'—') + '</div>' +
+      (d.who ? '<div class="prm-tip-who">👤 ' + _esc(d.who) + '</div>' : '') +
+      '<div class="prm-tip-hint">✏ Click to edit</div>' +
+      '<div class="prm-tip-arrow"></div>';
+    t.style.display = 'block';
+    t.style.removeProperty('left');
+    t.style.removeProperty('top');
+    // Position above the bar element, centered
+    var el = evt.currentTarget;
+    var rect = el.getBoundingClientRect();
+    var tw = 280;
+    var th = t.offsetHeight || 160;
+    var x = rect.left + rect.width / 2 - tw / 2;
+    var y = rect.top - th - 12;
+    if (x < 8) x = 8;
+    if (x + tw > window.innerWidth - 8) x = window.innerWidth - tw - 8;
+    // If no space above, show below
+    var below = y < 8;
+    if (below) y = rect.bottom + 12;
+    t.style.left = x + 'px';
+    t.style.top  = y + 'px';
+    t.querySelector('.prm-tip-arrow').className = 'prm-tip-arrow ' + (below ? 'prm-tip-arrow-up' : 'prm-tip-arrow-dn');
+  };
+  window._prmMoveTip = function() {}; // tooltip is now anchored, not cursor-following
+  window._prmHideTip = function() { if (tip) tip.style.display = 'none'; };
+  function _esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+})();
+
+// ── Group / Category Color Picker ──
+var PRM_PALETTE = [
+  '#F44336','#E91E63','#9C27B0','#673AB7','#3F51B5','#2196F3','#03A9F4','#00BCD4',
+  '#009688','#4CAF50','#8BC34A','#CDDC39','#FFC107','#FF9800','#FF5722','#795548',
+  '#607D8B','#9E9E9E','#37474F','#1B5E20'
+];
+
+window._prmPickColor = function(key, currentColor, evt) {
+  // Remove any existing picker
+  var old = document.getElementById('prm-color-picker-popup');
+  if (old) { old.remove(); if (old.dataset.key === key) return; }
+
+  var pop = document.createElement('div');
+  pop.id = 'prm-color-picker-popup';
+  pop.dataset.key = key;
+  pop.className = 'prm-color-popup';
+  pop.innerHTML =
+    '<div class="prm-color-popup-title">Pick Color</div>' +
+    '<div class="prm-color-swatches">' +
+      PRM_PALETTE.map(function(c) {
+        return '<span class="prm-color-sw' + (c === currentColor ? ' active' : '') + '" ' +
+          'style="background:' + c + '" ' +
+          'onclick="window._prmApplyColor(\'' + key + '\',\'' + c + '\')" title="' + c + '"></span>';
+      }).join('') +
+    '</div>' +
+    '<div style="display:flex;align-items:center;gap:6px;margin-top:8px">' +
+      '<label style="font-size:11px;color:var(--text2)">Custom:</label>' +
+      '<input type="color" id="prm-custom-color" value="' + (currentColor||'#4d90e0') + '" style="width:36px;height:24px;border:none;padding:0;cursor:pointer">' +
+      '<button class="btn btn-primary btn-sm" style="font-size:11px;padding:2px 8px" ' +
+        'onclick="window._prmApplyColor(\'' + key + '\',document.getElementById(\'prm-custom-color\').value)">Apply</button>' +
+    '</div>';
+
+  // Position near click
+  var rect = evt.target.getBoundingClientRect();
+  pop.style.top  = (rect.bottom + window.scrollY + 6) + 'px';
+  pop.style.left = (rect.left  + window.scrollX)     + 'px';
+  document.body.appendChild(pop);
+
+  // Close on outside click
+  setTimeout(function() {
+    document.addEventListener('click', function _closePop(e) {
+      if (!pop.contains(e.target)) { pop.remove(); document.removeEventListener('click', _closePop); }
+    });
+  }, 0);
+};
+
+window._prmApplyColor = function(key, color) {
+  // Save to localStorage immediately for instant UI update
+  var stored = JSON.parse(localStorage.getItem('prm_gc_colors') || '{}');
+  stored[key] = color;
+  localStorage.setItem('prm_gc_colors', JSON.stringify(stored));
+  var pop = document.getElementById('prm-color-picker-popup');
+  if (pop) pop.remove();
+  _prmRender();
+  // Persist to DB in background
+  api('/api/roadmap/colors', 'POST', { color_key: key, color: color }).catch(function() {});
 };
 
 window._prmDelete = async function(id) {
@@ -1989,12 +2378,14 @@ function _wlrTimesheetTable(rows) {
     '<th class="wlr-sheet-th">Time (m)</th>' +
     '<th class="wlr-sheet-th">Description</th>' +
     sortTh('is_billable', 'Billable') +
+    '<th class="wlr-sheet-th" style="width:64px"></th>' +
     '</tr></thead><tbody>';
 
   sorted.forEach(function(r, i) {
     var u  = findUser(r.user_id);
     var sp = getSpace(r.space_id);
     var mins = r.time_spent || 0;
+    var canEdit = r.user_id === S.currentUser || (S.currentUserObj && (S.currentUserObj.role === 'admin' || S.currentUserObj.role === 'owner'));
     html += '<tr class="wlr-sheet-row">' +
       '<td class="wlr-sheet-td wlr-sheet-num text-muted">' + (i+1) + '</td>' +
       '<td class="wlr-sheet-td">' + esc(r.work_date ? r.work_date.slice(0,10) : '—') + '</td>' +
@@ -2006,6 +2397,10 @@ function _wlrTimesheetTable(rows) {
       '<td class="wlr-sheet-td wlr-sheet-num">' + mins + '</td>' +
       '<td class="wlr-sheet-td text-muted">' + esc(r.description||'—') + '</td>' +
       '<td class="wlr-sheet-td wlr-sheet-num">' + (r.is_billable ? '<span style="color:var(--success);font-weight:700">✓</span>' : '<span style="color:var(--text3)">—</span>') + '</td>' +
+      '<td class="wlr-sheet-td" style="white-space:nowrap">' +
+        (canEdit ? '<button class="btn-icon" title="Edit" onclick="window._wlrEditWorklog(\'' + r.id + '\')">✏️</button>' : '') +
+        (canEdit ? '<button class="btn-icon" title="Delete" onclick="window._wlrDeleteWorklog(\'' + r.id + '\',\'' + r.issue_id + '\')" style="opacity:.5">🗑</button>' : '') +
+      '</td>' +
     '</tr>';
   });
 
@@ -2014,12 +2409,60 @@ function _wlrTimesheetTable(rows) {
     '<td colspan="6" style="text-align:right;font-weight:700;color:var(--text2)">TOTAL (' + totalCount + ' entries)</td>' +
     '<td class="wlr-sheet-num" style="font-weight:700;color:var(--accent)">' + (totalMins/60).toFixed(2) + '</td>' +
     '<td class="wlr-sheet-num" style="font-weight:700">' + totalMins + '</td>' +
-    '<td colspan="2"></td>' +
+    '<td colspan="3"></td>' +
   '</tr>';
 
   html += '</tbody></table></div>';
   return matrixHtml + divider + html;
 }
+
+// ── Worklog Edit Modal ──
+window._wlrEditWorklog = function(id) {
+  var r = _wlrData.find(function(x){ return x.id === id; });
+  if (!r) return;
+  var html = '<div class="modal-overlay" id="wlrEditOverlay" onclick="if(event.target===this)document.getElementById(\'wlrEditOverlay\').remove()">' +
+    '<div class="modal-box" style="max-width:420px">' +
+    '<div class="modal-header"><h3>Edit Work Log</h3><button class="btn-icon" onclick="document.getElementById(\'wlrEditOverlay\').remove()">✕</button></div>' +
+    '<div class="modal-body" style="display:grid;gap:14px">' +
+      '<div><label class="form-label">Issue</label><p style="font-size:13px;margin:0;color:var(--text2)">' + esc(r.issue_key) + ' — ' + esc(r.issue_title||'') + '</p></div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">' +
+        '<div><label class="form-label">Time Spent (minutes)</label><input id="wlrEditTime" class="input" type="number" min="1" value="' + (r.time_spent||0) + '"></div>' +
+        '<div><label class="form-label">Date</label><input id="wlrEditDate" class="input" type="date" value="' + esc(r.work_date ? r.work_date.slice(0,10) : '') + '"></div>' +
+      '</div>' +
+      '<div><label class="form-label">Description</label><textarea id="wlrEditDesc" class="input" rows="2">' + esc(r.description||'') + '</textarea></div>' +
+      '<div style="display:flex;align-items:center;gap:8px"><input id="wlrEditBillable" type="checkbox"' + (r.is_billable ? ' checked' : '') + ' style="width:16px;height:16px"><label for="wlrEditBillable" class="form-label" style="margin:0">Billable</label></div>' +
+    '</div>' +
+    '<div class="modal-footer"><span style="flex:1"></span>' +
+      '<button class="btn btn-secondary btn-sm" onclick="document.getElementById(\'wlrEditOverlay\').remove()">Cancel</button>' +
+      '<button class="btn btn-primary btn-sm" onclick="window._wlrSaveWorklog(\'' + id + '\')">💾 Save</button>' +
+    '</div></div></div>';
+  var el = document.createElement('div'); el.innerHTML = html;
+  document.body.appendChild(el.firstChild);
+};
+
+window._wlrSaveWorklog = async function(id) {
+  var payload = {
+    time_spent:  parseInt($('wlrEditTime').value, 10) || 0,
+    work_date:   $('wlrEditDate').value || null,
+    description: $('wlrEditDesc').value || null,
+    is_billable: $('wlrEditBillable').checked
+  };
+  try {
+    await api('/api/worklogs/' + id, 'PUT', payload);
+    var ov = $('wlrEditOverlay'); if (ov) ov.remove();
+    toast('Work log updated');
+    await _wlrFetch();
+  } catch(e) { toast('Failed to save: ' + (e.message||e), 'error'); }
+};
+
+window._wlrDeleteWorklog = async function(id, issueId) {
+  if (!confirm('Delete this work log entry? This cannot be undone.')) return;
+  try {
+    await api('/api/worklogs/' + id, 'DELETE');
+    toast('Work log deleted');
+    await _wlrFetch();
+  } catch(e) { toast('Delete failed: ' + (e.message||e), 'error'); }
+};
 
 // ── Old fixed Pivot (reused by Timesheet for matrix section) ──
 function _wlrPivotTable(rows) {
@@ -2684,128 +3127,208 @@ function renderReports() {
 async function renderReportContent(type) {
   var c = $('reportContent');
   c.innerHTML = '<p class="text-muted">Loading report\u2026</p>';
-
   try {
     if (type === 'burndown') {
       var sprints = getSpaceSprints(S.currentSpace);
-      var activeSprint = sprints.find(function (sp) { return sp.status === 'active'; });
-      if (!activeSprint) { c.innerHTML = '<p class="placeholder-text">No active sprint for burndown chart.</p>'; return; }
-      var data = await api('/api/reports/sprint/' + activeSprint.id);
-      renderBurndownReport(c, data, activeSprint);
+      var targetSprint = sprints.find(function(sp){ return sp.status === 'active'; }) || sprints[sprints.length - 1];
+      if (!targetSprint) { c.innerHTML = '<p class="placeholder-text">No sprints found for this space.</p>'; return; }
+      var data = await api('/api/reports/sprint/' + targetSprint.id);
+      renderBurndownReport(c, data, sprints);
     } else if (type === 'velocity') {
       var data2 = await api('/api/reports/velocity?space_id=' + S.currentSpace);
       renderVelocityReport(c, data2);
     } else if (type === 'cumulative') {
       var data3 = await api('/api/reports/status?space_id=' + S.currentSpace);
-      renderStatusReport(c, data3);
+      renderCumulativeReport(c, data3);
     } else if (type === 'control') {
-      var data4 = await api('/api/reports/workload?space_id=' + S.currentSpace);
-      renderWorkloadReport(c, data4);
+      var data4 = await api('/api/reports/cycle-time?space_id=' + S.currentSpace);
+      renderControlChart(c, data4);
     }
   } catch (e) {
     c.innerHTML = '<p class="text-muted">Failed to load report: ' + esc(e.message) + '</p>';
   }
 }
 
-function renderBurndownReport(c, data, sprint) {
-  var issues = getSpaceIssues(S.currentSpace).filter(function (i) { return i.sprint_id == sprint.id; });
-  var total = issues.length;
-  var done = issues.filter(function (i) { return i.status === 'Done'; }).length;
+function renderBurndownReport(c, data, allSprints) {
+  // Works with /api/reports/sprint/:id response:
+  // { sprint, total, done, in_progress, points_completed, points_remaining }
+  var sprint = data.sprint || {};
+  var total = Number(data.total) || 0;
+  var done = Number(data.done) || 0;
+  var inProgress = Number(data.in_progress) || 0;
   var remaining = total - done;
+  var ptsDone = Number(data.points_completed) || 0;
+  var ptsLeft = Number(data.points_remaining) || 0;
+
+  // Sprint selector
+  var sprintOpts = (allSprints || []).map(function(sp) {
+    return '<option value="' + sp.id + '"' + (sp.id === sprint.id ? ' selected' : '') + '>' + esc(sp.name) + '</option>';
+  }).join('');
+  var selectorHtml = allSprints && allSprints.length > 1
+    ? '<div style="margin-bottom:12px"><label style="font-size:12px;color:var(--text2);margin-right:8px">Sprint:</label>' +
+      '<select class="input input-sm" onchange="window._rptChangeSprint(this.value)">' + sprintOpts + '</select></div>'
+    : '';
+
+  // Visual progress bar showing Done / In Progress / Remaining
+  var chartH = 140;
+  var segments = [
+    { label: 'Done', count: done, color: STATUS_COLORS['Done'] },
+    { label: 'In Progress', count: inProgress, color: STATUS_COLORS['In Progress'] },
+    { label: 'To Do', count: Math.max(0, remaining - inProgress), color: STATUS_COLORS['To Do'] }
+  ];
+  var barCols = segments.map(function(seg) {
+    var h = total ? Math.round((seg.count / total) * chartH) : 0;
+    return '<div class="rpt-bd-day" title="' + esc(seg.label) + ': ' + seg.count + '">' +
+      '<div style="height:' + chartH + 'px;width:40px;display:flex;align-items:flex-end">' +
+      '<div style="width:100%;height:' + h + 'px;background:' + seg.color + ';border-radius:4px 4px 0 0"></div>' +
+      '</div>' +
+      '<div class="rpt-bd-label">' + esc(seg.label) + '</div>' +
+      '<div class="rpt-bd-label" style="font-weight:600;color:var(--text)">' + seg.count + '</div>' +
+      '</div>';
+  }).join('');
+
+  // Ideal burn line: a simple gradient bar from left (full) to right (zero)
+  var progressPct = total ? Math.round((done / total) * 100) : 0;
+  var progressBar = '<div style="margin:16px 0 8px">' +
+    '<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text2);margin-bottom:4px">' +
+    '<span>Progress</span><span>' + progressPct + '%</span></div>' +
+    '<div style="height:8px;background:var(--bg2);border-radius:4px;overflow:hidden">' +
+    '<div style="height:100%;width:' + progressPct + '%;background:' + STATUS_COLORS['Done'] + ';border-radius:4px;transition:width .3s"></div>' +
+    '</div></div>';
 
   c.innerHTML = '<div class="report-chart">' +
-    '<h4>Sprint Burndown: ' + esc(sprint.name) + '</h4>' +
+    selectorHtml +
+    '<h4>Burn Down: ' + esc(sprint.name || '') + '</h4>' +
     '<div class="report-stats-row">' +
     statCard('Total', total, '#174F96') +
     statCard('Done', done, STATUS_COLORS['Done']) +
     statCard('Remaining', remaining, STATUS_COLORS['In Progress']) +
+    statCard('Pts Completed', ptsDone, STATUS_COLORS['Done']) +
+    statCard('Pts Remaining', ptsLeft, STATUS_COLORS['In Progress']) +
     '</div>' +
-    '<div class="bar-chart-vertical">' +
-    '<div class="bar-group"><div class="bar-col" style="height:' + (total ? 100 : 0) + '%;background:#174F96" title="Total: ' + total + '"></div><span>Total</span></div>' +
-    '<div class="bar-group"><div class="bar-col" style="height:' + (total ? Math.round(done / total * 100) : 0) + '%;background:' + STATUS_COLORS['Done'] + '" title="Done: ' + done + '"></div><span>Done</span></div>' +
-    '<div class="bar-group"><div class="bar-col" style="height:' + (total ? Math.round(remaining / total * 100) : 0) + '%;background:' + STATUS_COLORS['In Progress'] + '" title="Remaining: ' + remaining + '"></div><span>Remaining</span></div>' +
-    '</div></div>';
+    progressBar +
+    '<div class="rpt-bd-wrap">' + barCols + '</div>' +
+    '</div>';
+
+  window._rptChangeSprint = async function(sprintId) {
+    var cont = $('reportContent') || c;
+    cont.innerHTML = '<p class="text-muted">Loading\u2026</p>';
+    try {
+      var d = await api('/api/reports/sprint/' + sprintId);
+      renderBurndownReport(cont, d, allSprints);
+    } catch(e) { cont.innerHTML = '<p class="text-muted">Error: ' + esc(e.message) + '</p>'; }
+  };
 }
 
 function renderVelocityReport(c, data) {
-  var sprints = Array.isArray(data) ? data : (data.sprints || []);
-  if (!sprints.length) { c.innerHTML = '<p class="placeholder-text">No completed sprints for velocity data.</p>'; return; }
+  var sprints = Array.isArray(data) ? data : [];
+  if (!sprints.length) { c.innerHTML = '<p class="placeholder-text">No completed sprints yet. Complete a sprint to see velocity data.</p>'; return; }
 
-  var max = 1;
-  for (var i = 0; i < sprints.length; i++) {
-    var pts = sprints[i].completed_points || sprints[i].points || 0;
-    if (pts > max) max = pts;
-  }
+  var velocities = sprints.map(function(sp) { return sp.velocity || 0; });
+  var max = Math.max.apply(null, velocities) || 1;
+  var avg = Math.round(velocities.reduce(function(s, v){ return s + v; }, 0) / velocities.length);
+  var avgPct = Math.round((avg / max) * 100);
 
-  var html = '<div class="report-chart"><h4>Velocity Chart</h4><div class="velocity-bars">';
-  for (var j = 0; j < sprints.length; j++) {
-    var sp = sprints[j];
-    var p = sp.completed_points || sp.points || 0;
-    var pct = Math.round((p / max) * 100);
-    html += '<div class="velocity-bar-group">' +
-      '<div class="velocity-bar" style="height:' + pct + '%;background:#174F96"></div>' +
-      '<span class="velocity-label">' + esc(sp.name || sp.sprint_name || '') + '</span>' +
-      '<span class="velocity-value">' + p + ' pts</span></div>';
-  }
-  html += '</div></div>';
-  c.innerHTML = html;
+  var bars = sprints.map(function(sp) {
+    var v = sp.velocity || 0;
+    var pct = Math.round((v / max) * 100);
+    var color = v >= avg ? '#10b981' : '#174F96';
+    return '<div class="velocity-bar-group">' +
+      '<div class="velocity-bar" style="height:' + Math.max(pct, 4) + '%;background:' + color + '" title="' + esc(sp.name) + ': ' + v + ' pts"></div>' +
+      '<span class="velocity-label">' + esc(sp.name) + '</span>' +
+      '<span class="velocity-value">' + v + ' pts</span>' +
+      '</div>';
+  }).join('');
+
+  c.innerHTML = '<div class="report-chart">' +
+    '<h4>Velocity Chart</h4>' +
+    '<div class="report-stats-row">' + statCard('Avg Velocity', avg + ' pts', '#174F96') + '</div>' +
+    '<div style="display:flex;align-items:center;gap:12px;margin-bottom:4px;font-size:11px;color:var(--text2)">' +
+    '<span style="display:inline-block;width:12px;height:12px;background:#10b981;border-radius:2px"></span> Above avg' +
+    '<span style="display:inline-block;width:12px;height:12px;background:#174F96;border-radius:2px;margin-left:8px"></span> Below avg' +
+    '</div>' +
+    '<div style="position:relative">' +
+    '<div class="velocity-bars">' + bars + '</div>' +
+    '<div style="position:absolute;bottom:' + avgPct + '%;left:0;right:0;border-top:2px dashed #ef4444;pointer-events:none">' +
+    '<span style="position:absolute;right:0;top:-18px;font-size:10px;color:#ef4444;background:var(--bg);padding:0 4px">avg ' + avg + '</span>' +
+    '</div>' +
+    '</div></div>';
 }
 
-function renderStatusReport(c, data) {
+function renderCumulativeReport(c, data) {
+  var STATUSES = ['To Do', 'In Progress', 'In Review', 'Done'];
   var issues = getSpaceIssues(S.currentSpace);
-  var groups = ['To Do', 'In Progress', 'In Review', 'Done'].map(function (s) {
-    var apiCount = 0;
-    if (Array.isArray(data)) {
-      var found = data.find(function (x) { return x.status === s; });
-      if (found) apiCount = found.count;
-    }
+  var counts = STATUSES.map(function(s) {
+    var apiRow = Array.isArray(data) ? data.find(function(x){ return x.status === s; }) : null;
     return {
       label: s,
-      count: apiCount || issues.filter(function (i) { return i.status === s; }).length,
-      color: STATUS_COLORS[s]
+      count: apiRow ? apiRow.count : issues.filter(function(i){ return i.status === s; }).length,
+      color: STATUS_COLORS[s] || '#6b7280'
     };
   });
-  var total = groups.reduce(function (sum, g) { return sum + g.count; }, 0);
-  c.innerHTML = '<div class="report-chart"><h4>Status Distribution</h4>' + barChart(groups, total) + '</div>';
+  var total = counts.reduce(function(s, g){ return s + g.count; }, 0) || 1;
+
+  // Stacked horizontal bar
+  var segments = counts.map(function(g) {
+    var pct = Math.round((g.count / total) * 100);
+    return '<div title="' + esc(g.label) + ': ' + g.count + '" style="width:' + pct + '%;background:' + g.color + ';height:100%;min-width:' + (g.count ? 2 : 0) + 'px"></div>';
+  }).join('');
+
+  // Legend + per-status bars
+  var legend = counts.map(function(g) {
+    var pct = Math.round((g.count / total) * 100);
+    return '<div class="bar-row">' +
+      '<span class="bar-label" style="display:flex;align-items:center;gap:6px">' +
+      '<span style="display:inline-block;width:10px;height:10px;background:' + g.color + ';border-radius:2px;flex-shrink:0"></span>' +
+      esc(g.label) + '</span>' +
+      '<div class="bar-track"><div class="bar-fill" style="width:' + pct + '%;background:' + g.color + '"></div></div>' +
+      '<span class="bar-value">' + g.count + ' (' + pct + '%)</span>' +
+      '</div>';
+  }).join('');
+
+  c.innerHTML = '<div class="report-chart">' +
+    '<h4>Cumulative Flow — Current Snapshot</h4>' +
+    '<p style="font-size:12px;color:var(--text2);margin-bottom:12px">Work items across all stages (today\'s snapshot)</p>' +
+    '<div style="display:flex;height:28px;border-radius:6px;overflow:hidden;margin-bottom:20px">' + segments + '</div>' +
+    legend +
+    '</div>';
 }
 
-function renderWorkloadReport(c, data) {
-  var workloads = Array.isArray(data) ? data : (data.workloads || []);
-
-  if (!workloads.length) {
-    // Fallback: compute from local data
-    var issues = getSpaceIssues(S.currentSpace).filter(function (i) { return i.assignee_id; });
-    var byAssignee = {};
-    for (var i = 0; i < issues.length; i++) {
-      var u = findUser(issues[i].assignee_id);
-      var name = u ? u.name : 'Unknown';
-      byAssignee[name] = (byAssignee[name] || 0) + 1;
-    }
-    workloads = Object.keys(byAssignee).map(function (name) {
-      return { name: name, count: byAssignee[name] };
-    });
+function renderControlChart(c, data) {
+  var items = Array.isArray(data) ? data : [];
+  if (!items.length) {
+    c.innerHTML = '<div class="report-chart"><h4>Control Chart — Cycle Time</h4><p class="placeholder-text">No completed issues with history data yet.</p></div>';
+    return;
   }
 
-  if (!workloads.length) { c.innerHTML = '<p class="placeholder-text">No workload data available.</p>'; return; }
+  var cycleDays = items.map(function(r){ return parseFloat(r.cycle_days) || 0; });
+  var maxDays = Math.max.apply(null, cycleDays) || 1;
+  var avgDays = Math.round(cycleDays.reduce(function(s,v){ return s+v; }, 0) / cycleDays.length * 10) / 10;
 
-  var max = 1;
-  for (var j = 0; j < workloads.length; j++) {
-    var cnt = workloads[j].issue_count || workloads[j].count || 0;
-    if (cnt > max) max = cnt;
-  }
+  var rows = items.map(function(r) {
+    var days = parseFloat(r.cycle_days) || 0;
+    var pct = Math.round((days / maxDays) * 100);
+    var color = days < 3 ? '#10b981' : days < 7 ? '#f59e0b' : '#ef4444';
+    return '<div class="rpt-ct-row">' +
+      '<span class="rpt-ct-key" title="' + esc(r.key) + '">' + esc(r.key) + '</span>' +
+      '<span style="flex:1;font-size:11px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px" title="' + esc(r.title) + '">' + esc(r.title) + '</span>' +
+      '<div class="rpt-ct-track" style="margin:0 8px">' +
+      '<div class="rpt-ct-fill" style="width:' + pct + '%;background:' + color + '"></div>' +
+      '</div>' +
+      '<span class="rpt-ct-days">' + days + 'd</span>' +
+      '</div>';
+  }).join('');
 
-  var html = '<div class="report-chart"><h4>Team Workload</h4>';
-  for (var k = 0; k < workloads.length; k++) {
-    var wk = workloads[k];
-    var count = wk.issue_count || wk.count || 0;
-    var pct = Math.round((count / max) * 100);
-    html += '<div class="bar-row">' +
-      '<span class="bar-label">' + esc(wk.name || wk.assignee_name || 'Unknown') + '</span>' +
-      '<div class="bar-track"><div class="bar-fill" style="width:' + pct + '%;background:#174F96"></div></div>' +
-      '<span class="bar-value">' + count + ' issues</span></div>';
-  }
-  html += '</div>';
-  c.innerHTML = html;
+  c.innerHTML = '<div class="report-chart">' +
+    '<h4>Control Chart — Cycle Time per Issue</h4>' +
+    '<div class="report-stats-row">' + statCard('Avg Cycle Time', avgDays + ' days', '#174F96') + '</div>' +
+    '<div style="display:flex;gap:12px;font-size:11px;color:var(--text2);margin-bottom:12px">' +
+    '<span style="display:inline-block;width:10px;height:10px;background:#10b981;border-radius:2px"></span> &lt;3d' +
+    '<span style="display:inline-block;width:10px;height:10px;background:#f59e0b;border-radius:2px;margin-left:8px"></span> 3–7d' +
+    '<span style="display:inline-block;width:10px;height:10px;background:#ef4444;border-radius:2px;margin-left:8px"></span> &gt;7d' +
+    '</div>' +
+    rows +
+    '</div>';
 }
 
 // ═══════════════════════════════════════════════════════════

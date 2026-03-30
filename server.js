@@ -63,7 +63,7 @@ app.get('/api/data', requireAuth, wrap(async (req, res) => {
 
   const [org, users, allSpaces, allSm, sf] = await Promise.all([
     q('SELECT * FROM organizations LIMIT 1'),
-    q('SELECT id,name,email,role,color,avatar_url,is_active,last_login FROM users'),
+    q('SELECT id,name,email,role,color,avatar_url,is_active,last_login,theme FROM users'),
     q('SELECT * FROM spaces WHERE is_archived=false'),
     q('SELECT * FROM space_members'),
     q('SELECT * FROM space_favorites')
@@ -256,7 +256,7 @@ app.post('/api/sprints/:id/start', wrap(async (req, res) => {
 
 app.post('/api/sprints/:id/complete', wrap(async (req, res) => {
   const sid = req.params.id;
-  const done = await q("SELECT COALESCE(SUM(points),0)::int AS pts FROM issues WHERE sprint_id=$1 AND status='Done'", [sid]);
+  const done = await q("SELECT COALESCE(SUM(story_points),0)::int AS pts FROM issues WHERE sprint_id=$1 AND status='Done'", [sid]);
   await q("UPDATE sprints SET status='completed',velocity=$2 WHERE id=$1", [sid, done.rows[0].pts]);
   await q("UPDATE issues SET sprint_id=NULL WHERE sprint_id=$1 AND status!='Done'", [sid]);
   const r = await q('SELECT * FROM sprints WHERE id=$1', [sid]);
@@ -315,7 +315,7 @@ app.get('/api/issues/:id', wrap(async (req, res) => {
       FROM issue_links l
       LEFT JOIN issues t ON (t.id=CASE WHEN l.source_id=$1 THEN l.target_id ELSE l.source_id END)
       WHERE l.source_id=$1 OR l.target_id=$1`, [id]),
-    q(`SELECT id, key, title, status, type, priority, assignee_id, points
+    q(`SELECT id, key, title, status, type, priority, assignee_id, story_points
       FROM issues WHERE parent_id=$1 ORDER BY position, created_at`, [id]),
     q(`SELECT v.*, f.name AS field_name, f.field_type
       FROM issue_field_values v JOIN custom_fields f ON f.id=v.field_id WHERE v.issue_id=$1`, [id]),
@@ -341,11 +341,11 @@ app.post('/api/issues', wrap(async (req, res) => {
   const key = `${spaceKey}-${cnt + 1}`;
   const id = uid();
   const r = await q(`INSERT INTO issues(id,key,space_id,sprint_id,parent_id,title,description,type,priority,
-      assignee_id,reporter_id,points,labels,start_date,due_date,original_estimate)
+      assignee_id,reporter_id,story_points,labels,start_date,due_date,original_estimate)
     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`,
     [id, key, b.space_id, b.sprint_id || null, b.parent_id || null, b.title, b.description || null,
      b.type || 'task', b.priority || 'medium', b.assignee_id || null, b.reporter_id || null,
-     b.points || null, b.labels || null, b.start_date || null, b.due_date || null, b.original_estimate || null]);
+     b.story_points || b.points || null, b.labels || null, b.start_date || null, b.due_date || null, b.original_estimate || null]);
   res.status(201).json(r.rows[0]);
 }));
 
@@ -443,6 +443,29 @@ app.post('/api/worklogs', requireAuth, wrap(async (req, res) => {
   res.status(201).json(r.rows[0]);
 }));
 
+app.put('/api/worklogs/:id', requireAuth, wrap(async (req, res) => {
+  const wl = (await q('SELECT * FROM worklogs WHERE id=$1', [req.params.id])).rows[0];
+  if (!wl) return res.status(404).json({ error: 'Not found' });
+  if (wl.user_id !== req.user.user_id && req.user.role !== 'admin' && req.user.role !== 'owner')
+    return res.status(403).json({ error: 'Cannot edit another user\'s worklog' });
+  const { time_spent, description, work_date, is_billable } = req.body;
+  const newTime = time_spent !== undefined ? Number(time_spent) : wl.time_spent;
+  const diff = newTime - wl.time_spent;
+  if (diff !== 0) {
+    await q('UPDATE issues SET time_spent=GREATEST(COALESCE(time_spent,0)+$2,0),updated_at=NOW() WHERE id=$1', [wl.issue_id, diff]);
+  }
+  const r = await q(
+    `UPDATE worklogs SET time_spent=$2,description=$3,work_date=$4,is_billable=$5 WHERE id=$1
+     RETURNING *, (SELECT u.name FROM users u WHERE u.id=worklogs.user_id) AS user_name,
+                  (SELECT i.key FROM issues i WHERE i.id=worklogs.issue_id) AS issue_key`,
+    [req.params.id, newTime,
+     description !== undefined ? description : wl.description,
+     work_date   !== undefined ? work_date   : wl.work_date,
+     is_billable !== undefined ? is_billable : wl.is_billable]
+  );
+  res.json(r.rows[0]);
+}));
+
 app.delete('/api/worklogs/:id', requireAuth, wrap(async (req, res) => {
   const wl = (await q('SELECT * FROM worklogs WHERE id=$1', [req.params.id])).rows[0];
   if (!wl) return res.status(404).json({ error: 'Not found' });
@@ -458,7 +481,7 @@ app.delete('/api/worklogs/:id', requireAuth, wrap(async (req, res) => {
 // ── Product Roadmap ───────────────────────────────────────
 app.get('/api/roadmap', requireAuth, wrap(async (req, res) => {
   const { space_id, status } = req.query;
-  let sql = `SELECT r.*, u.name AS assigned_name, i.issue_key, i.title AS issue_title,
+  let sql = `SELECT r.*, u.name AS assigned_name, i.key AS issue_key, i.title AS issue_title,
                s.name AS space_name, cb.name AS created_by_name
              FROM roadmap_items r
              LEFT JOIN users u  ON u.id  = r.assigned_to
@@ -474,26 +497,51 @@ app.get('/api/roadmap', requireAuth, wrap(async (req, res) => {
 }));
 
 app.post('/api/roadmap', requireAuth, wrap(async (req, res) => {
-  const { title, description, status, start_date, end_date, space_id, issue_id, color, priority, assigned_to } = req.body;
+  const { title, description, status, start_date, end_date, space_id, issue_id, color, priority, assigned_to, group_name, category, milestone } = req.body;
   if (!title) return res.status(400).json({ error: 'Title required' });
+
+  // Auto-create a backlog issue in the linked space (sprint_id=null = backlog)
+  let linkedIssueId = issue_id || null;
+  if (space_id && !linkedIssueId) {
+    try {
+      const spaceRow = (await q('SELECT key FROM spaces WHERE id=$1', [space_id])).rows[0];
+      if (spaceRow) {
+        const cnt = (await q('SELECT COUNT(*)::int AS c FROM issues WHERE space_id=$1', [space_id])).rows[0].c;
+        const issueKey = `${spaceRow.key}-${cnt + 1}`;
+        const issueId = uid();
+        await q(
+          `INSERT INTO issues(id,key,space_id,title,description,type,priority,assignee_id,reporter_id,start_date,due_date)
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+          [issueId, issueKey, space_id, title, description||null,
+           'task', priority||'medium', assigned_to||null, req.user.user_id,
+           start_date||null, end_date||null]
+        );
+        linkedIssueId = issueId;
+      }
+    } catch(e) { console.error('Auto-create backlog issue failed:', e.message); }
+  }
+
   const id = 'rm_' + Date.now() + Math.random().toString(36).slice(2, 7);
   const row = (await q(
-    `INSERT INTO roadmap_items (id,title,description,status,start_date,end_date,space_id,issue_id,color,priority,assigned_to,created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+    `INSERT INTO roadmap_items (id,title,description,status,start_date,end_date,space_id,issue_id,color,priority,assigned_to,created_by,group_name,category,milestone)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
     [id, title, description||null, status||'planned', start_date||null, end_date||null,
-     space_id||null, issue_id||null, color||'#4d90e0', priority||'medium', assigned_to||null, req.user.user_id]
+     space_id||null, linkedIssueId, color||'#4d90e0', priority||'medium', assigned_to||null,
+     req.user.user_id, group_name||'General', category||'Items', milestone||false]
   )).rows[0];
   res.json(row);
 }));
 
 app.put('/api/roadmap/:id', requireAuth, wrap(async (req, res) => {
-  const { title, description, status, start_date, end_date, space_id, issue_id, color, priority, assigned_to } = req.body;
+  const { title, description, status, start_date, end_date, space_id, issue_id, color, priority, assigned_to, group_name, category, milestone } = req.body;
   const row = (await q(
     `UPDATE roadmap_items SET title=$2,description=$3,status=$4,start_date=$5,end_date=$6,
-     space_id=$7,issue_id=$8,color=$9,priority=$10,assigned_to=$11,updated_at=NOW()
+     space_id=$7,issue_id=$8,color=$9,priority=$10,assigned_to=$11,
+     group_name=$12,category=$13,milestone=$14,updated_at=NOW()
      WHERE id=$1 RETURNING *`,
     [req.params.id, title, description||null, status||'planned', start_date||null, end_date||null,
-     space_id||null, issue_id||null, color||'#4d90e0', priority||'medium', assigned_to||null]
+     space_id||null, issue_id||null, color||'#4d90e0', priority||'medium', assigned_to||null,
+     group_name||'General', category||'Items', milestone||false]
   )).rows[0];
   if (!row) return res.status(404).json({ error: 'Not found' });
   res.json(row);
@@ -501,6 +549,25 @@ app.put('/api/roadmap/:id', requireAuth, wrap(async (req, res) => {
 
 app.delete('/api/roadmap/:id', requireAuth, wrap(async (req, res) => {
   await q('DELETE FROM roadmap_items WHERE id=$1', [req.params.id]);
+  res.json({ ok: true });
+}));
+
+// ── Roadmap Colors ────────────────────────────────────────
+app.get('/api/roadmap/colors', requireAuth, wrap(async (req, res) => {
+  const rows = (await q('SELECT color_key, color FROM roadmap_colors WHERE created_by=$1', [req.user.user_id])).rows;
+  const result = {};
+  rows.forEach(function(r) { result[r.color_key] = r.color; });
+  res.json(result);
+}));
+
+app.post('/api/roadmap/colors', requireAuth, wrap(async (req, res) => {
+  const { color_key, color } = req.body;
+  if (!color_key || !color) return res.status(400).json({ error: 'color_key and color required' });
+  await q(
+    `INSERT INTO roadmap_colors (color_key, color, created_by) VALUES ($1,$2,$3)
+     ON CONFLICT (color_key, created_by) DO UPDATE SET color=$2`,
+    [color_key, color, req.user.user_id]
+  );
   res.json({ ok: true });
 }));
 
@@ -684,8 +751,8 @@ app.get('/api/reports/sprint/:sprintId', requireAuth, wrap(async (req, res) => {
       COUNT(*)::int AS total,
       COUNT(*) FILTER (WHERE status='Done')::int AS done,
       COUNT(*) FILTER (WHERE status='In Progress')::int AS in_progress,
-      COALESCE(SUM(points) FILTER (WHERE status='Done'),0)::int AS points_completed,
-      COALESCE(SUM(points) FILTER (WHERE status!='Done'),0)::int AS points_remaining
+      COALESCE(SUM(story_points) FILTER (WHERE status='Done'),0)::int AS points_completed,
+      COALESCE(SUM(story_points) FILTER (WHERE status!='Done'),0)::int AS points_remaining
     FROM issues WHERE sprint_id=$1`, [sid])).rows[0];
   res.json({ sprint, ...stats });
 }));
@@ -716,6 +783,67 @@ app.get('/api/reports/workload', requireAuth, wrap(async (req, res) => {
     WHERE i.space_id=$1 GROUP BY u.id, u.name ORDER BY issue_count DESC`,
     [req.query.space_id]);
   res.json(r.rows);
+}));
+
+app.get('/api/reports/burndown/:sprintId', requireAuth, wrap(async (req, res) => {
+  const sprint = (await q('SELECT * FROM sprints WHERE id=$1', [req.params.sprintId])).rows[0];
+  if (!sprint) return res.status(404).json({ error: 'Not found' });
+
+  const issues = (await q('SELECT id, story_points AS points, status FROM issues WHERE sprint_id=$1', [sprint.id])).rows;
+  const total = issues.length;
+  const totalPts = issues.reduce((s, i) => s + (i.points || 0), 0);
+
+  const hist = issues.length
+    ? (await q(
+        `SELECT issue_id, MIN(created_at) AS done_at FROM issue_history
+         WHERE field_name='status' AND new_value='Done' AND issue_id = ANY($1)
+         GROUP BY issue_id`,
+        [issues.map(i => i.id)]
+      )).rows
+    : [];
+
+  const start = new Date(sprint.start_date);
+  const end = new Date(Math.min(new Date(sprint.end_date), Date.now()));
+  const series = [];
+  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    const dayEnd = new Date(d); dayEnd.setHours(23,59,59,999);
+    const doneRows = hist.filter(h => new Date(h.done_at) <= dayEnd);
+    const doneCnt = doneRows.length;
+    const donePts = doneRows.reduce((s, h) => {
+      const iss = issues.find(i => i.id === h.issue_id);
+      return s + (iss ? (iss.points || 0) : 0);
+    }, 0);
+    series.push({ date: d.toISOString().slice(0,10), remaining: total - doneCnt, remainingPts: totalPts - donePts });
+  }
+  res.json({ sprint, total, totalPts, series });
+}));
+
+app.get('/api/reports/cycle-time', requireAuth, wrap(async (req, res) => {
+  // Try issue_history first (accurate)
+  let rows = (await q(
+    `SELECT i.id, i.key, i.title, i.created_at,
+            MIN(h.created_at) AS done_at,
+            ROUND(EXTRACT(EPOCH FROM (MIN(h.created_at) - i.created_at))/86400, 1)::float AS cycle_days
+     FROM issues i
+     JOIN issue_history h ON h.issue_id=i.id AND h.field_name='status' AND h.new_value='Done'
+     WHERE i.space_id=$1
+     GROUP BY i.id, i.key, i.title, i.created_at
+     ORDER BY done_at DESC LIMIT 50`,
+    [req.query.space_id]
+  )).rows;
+
+  // Fallback: use updated_at as proxy for done_at when no history exists
+  if (!rows.length) {
+    rows = (await q(
+      `SELECT id, key, title, created_at,
+              updated_at AS done_at,
+              ROUND(EXTRACT(EPOCH FROM (updated_at - created_at))/86400, 1)::float AS cycle_days
+       FROM issues WHERE space_id=$1 AND status='Done'
+       ORDER BY updated_at DESC LIMIT 50`,
+      [req.query.space_id]
+    )).rows;
+  }
+  res.json(rows);
 }));
 
 // ── Notifications ─────────────────────────────────────────
@@ -833,28 +961,44 @@ app.post('/api/auth/logout', requireAuth, wrap(async (req, res) => {
 }));
 
 app.get('/api/auth/me', requireAuth, wrap(async (req, res) => {
-  const r = await q('SELECT id,name,email,role,color,avatar_url,is_active,last_login FROM users WHERE id=$1', [req.user.user_id]);
+  const r = await q('SELECT id,name,email,role,color,avatar_url,is_active,last_login,theme FROM users WHERE id=$1', [req.user.user_id]);
   res.json(r.rows[0]);
 }));
 
 // ── User Management ────────────────────────────────────────
 app.get('/api/users', requireAuth, wrap(async (req, res) => {
-  const r = await q('SELECT id,name,email,role,color,avatar_url,is_active,last_login,created_at FROM users ORDER BY created_at');
+  const r = await q('SELECT id,name,email,role,color,avatar_url,is_active,last_login,created_at,theme FROM users ORDER BY created_at');
   res.json(r.rows);
 }));
 
 app.put('/api/users/:id', requireAuth, wrap(async (req, res) => {
-  if (req.user.role !== 'admin' && req.user.role !== 'owner')
-    return res.status(403).json({ error: 'Only admins can update users' });
-  const { name, role, is_active } = req.body;
-  // Fetch existing user to detect what changed
-  const before = (await q('SELECT name,email,role,is_active FROM users WHERE id=$1', [req.params.id])).rows[0];
-  const r = await q('UPDATE users SET name=COALESCE($1,name),role=COALESCE($2,role),is_active=COALESCE($3,is_active) WHERE id=$4 RETURNING id,name,email,role,is_active',
-    [name, role, is_active, req.params.id]);
+  const isSelf = req.user.user_id === req.params.id;
+  const isAdmin = req.user.role === 'admin' || req.user.role === 'owner';
+  if (!isSelf && !isAdmin) return res.status(403).json({ error: 'Forbidden' });
+
+  const { name, role, is_active, theme, color, avatar_url } = req.body;
+  const before = (await q('SELECT name,email,role,is_active,theme FROM users WHERE id=$1', [req.params.id])).rows[0];
+
+  // Build dynamic update — self can only update name/theme/color/avatar; admins can also update role/is_active
+  const setClauses = [], vals = [];
+  const push = (col, val) => { setClauses.push(`${col}=$${vals.length + 1}`); vals.push(val); };
+
+  if (name     !== undefined) push('name', name);
+  if (theme    !== undefined) push('theme', theme);
+  if (color    !== undefined) push('color', color);
+  if (avatar_url !== undefined) push('avatar_url', avatar_url);
+  if (isAdmin) {
+    if (role     !== undefined) push('role', role);
+    if (is_active !== undefined) push('is_active', is_active);
+  }
+  if (!setClauses.length) return res.status(400).json({ error: 'Nothing to update' });
+
+  vals.push(req.params.id);
+  const r = await q(`UPDATE users SET ${setClauses.join(',')} WHERE id=$${vals.length} RETURNING id,name,email,role,is_active,color,avatar_url,theme`, vals);
   const updated = r.rows[0];
-  if (updated) {
-    if (before && role && before.role !== role) sendRoleChangeEmail(updated, role).catch(()=>{});
-    if (before && typeof is_active === 'boolean' && before.is_active !== is_active) sendActivationEmail(updated, is_active).catch(()=>{});
+  if (updated && isAdmin && before) {
+    if (role && before.role !== role) sendRoleChangeEmail(updated, role).catch(()=>{});
+    if (typeof is_active === 'boolean' && before.is_active !== is_active) sendActivationEmail(updated, is_active).catch(()=>{});
   }
   res.json(updated);
 }));
@@ -1191,6 +1335,38 @@ process.on('unhandledRejection', (reason) => {
         updated_at TIMESTAMP DEFAULT NOW()
       )`);
     } catch(e) { console.error('Migration warning (roadmap_items):', e.message); }
+
+    // Migration: add group_name + category to roadmap_items
+    try {
+      await pool.query(`ALTER TABLE roadmap_items ADD COLUMN IF NOT EXISTS group_name VARCHAR DEFAULT 'General'`);
+      await pool.query(`ALTER TABLE roadmap_items ADD COLUMN IF NOT EXISTS category  VARCHAR DEFAULT 'Items'`);
+      await pool.query(`ALTER TABLE roadmap_items ADD COLUMN IF NOT EXISTS milestone BOOLEAN DEFAULT FALSE`);
+    } catch(e) { console.error('Migration warning (roadmap group/category):', e.message); }
+
+    // Migration: create roadmap_colors table
+    try {
+      await pool.query(`CREATE TABLE IF NOT EXISTS roadmap_colors (
+        color_key  VARCHAR NOT NULL,
+        color      VARCHAR NOT NULL,
+        created_by VARCHAR REFERENCES users(id) ON DELETE CASCADE,
+        PRIMARY KEY (color_key, created_by)
+      )`);
+    } catch(e) { console.error('Migration warning (roadmap_colors):', e.message); }
+
+    // Migration: rename issues.points → story_points to match UI field name
+    try {
+      await pool.query(`ALTER TABLE issues RENAME COLUMN points TO story_points`);
+    } catch(e) { /* already renamed or doesn't exist */ }
+
+    // Migration: add story_points column if it still doesn't exist (fresh installs)
+    try {
+      await pool.query(`ALTER TABLE issues ADD COLUMN IF NOT EXISTS story_points INTEGER`);
+    } catch(e) {}
+
+    // Migration: add theme preference to users
+    try {
+      await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS theme VARCHAR DEFAULT 'dark'`);
+    } catch(e) { console.error('Migration warning (user theme):', e.message); }
 
     console.log('==================================================');
     console.log('  SprintBoard Server');

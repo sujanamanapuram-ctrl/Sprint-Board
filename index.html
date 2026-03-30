@@ -173,8 +173,17 @@
 
         <!-- Global Reports View -->
         <div class="view" id="view-global-reports" hidden>
-          <h1 class="view-title">Reports</h1>
-          <p class="placeholder-text">Global reports across all spaces.</p>
+          <div class="view-toolbar" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+            <h1 class="view-title" style="margin:0">Reports</h1>
+            <select id="globalReportSpace" class="input input-sm" style="min-width:160px" onchange="window._loadGlobalReport()"></select>
+            <select id="globalReportType" class="input input-sm" onchange="window._loadGlobalReport()">
+              <option value="burndown">Burndown Chart</option>
+              <option value="velocity">Velocity</option>
+              <option value="cumulative">Cumulative Flow</option>
+              <option value="control">Control Chart</option>
+            </select>
+          </div>
+          <div id="globalReportContent" class="report-content" style="padding:16px 0"></div>
         </div>
 
         <!-- Work Log Report View -->
@@ -310,6 +319,7 @@
               </div>
             </div>
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+              <select id="prmFilterYear" class="input input-sm" onchange="window._prmRender()"></select>
               <select id="prmFilterSpace" class="input input-sm" onchange="window._prmLoad()">
                 <option value="">All Spaces</option>
               </select>
@@ -339,6 +349,7 @@
                 <option value="low">Low</option>
               </select>
               <button class="btn btn-outline btn-sm" onclick="window._prmLoad()">↺ Refresh</button>
+              <button class="btn btn-outline btn-sm" id="prmFullscreenBtn" onclick="window._prmToggleFullscreen()" title="Fullscreen">⛶ Fullscreen</button>
               <button class="btn btn-primary btn-sm" onclick="window._prmOpenModal()">＋ Add Item</button>
             </div>
           </div>

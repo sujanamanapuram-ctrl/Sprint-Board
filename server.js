@@ -1261,6 +1261,24 @@ process.on('unhandledRejection', (reason) => {
   console.error('[unhandledRejection] Server kept alive:', reason);
 });
 
+// ── Admin: DB Sync endpoint ───────────────────────────────
+app.post('/api/admin/sync-db', async (req, res) => {
+  const secret = req.headers['x-sync-secret'] || req.body?.secret;
+  if (secret !== 'neutara-sync-2026') return res.status(403).json({ error: 'Forbidden' });
+  try {
+    const output = await new Promise((resolve, reject) => {
+      require('child_process').exec('node db/create-db.js', { cwd: __dirname }, (err, stdout, stderr) => {
+        if (err) reject(stderr || err.message);
+        else resolve(stdout);
+      });
+    });
+    console.log('[sync-db]', output);
+    res.json({ ok: true, output });
+  } catch(e) {
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
 // ── Startup ───────────────────────────────────────────────
 (async () => {
   try {

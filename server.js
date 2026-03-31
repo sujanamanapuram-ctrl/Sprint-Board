@@ -1266,6 +1266,22 @@ process.on('unhandledRejection', (reason) => {
   try {
     await pool.query('SELECT 1');
 
+    // Bootstrap: if tables don't exist (fresh deployment), run create-db.js
+    try {
+      const tableCheck = await pool.query(`SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema='public' AND table_name='users')`);
+      if (!tableCheck.rows[0].exists) {
+        console.log('🏗️  No tables found — running initial DB setup...');
+        await new Promise((resolve, reject) => {
+          require('child_process').exec('node db/create-db.js', { cwd: __dirname }, (err, stdout, stderr) => {
+            if (stdout) console.log(stdout);
+            if (err) { console.error('DB setup error:', stderr); reject(err); }
+            else resolve();
+          });
+        });
+        console.log('✅ Initial DB setup complete.');
+      }
+    } catch(e) { console.error('Bootstrap check failed:', e.message); }
+
     // Migration: add 'cancelled' to invitations status constraint
     try {
       await pool.query(`ALTER TABLE invitations DROP CONSTRAINT IF EXISTS invitations_status_check`);

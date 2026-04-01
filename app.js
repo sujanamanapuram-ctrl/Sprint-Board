@@ -3451,14 +3451,38 @@ var AW_FILTER_FIELDS = [
 // Which fields are currently shown as rows in the panel
 var _awActiveFields = [];
 
+// Build filter field defs from space custom fields
+function _awGetCFFilterFields() {
+  return (S.data.custom_fields || [])
+    .filter(function(f){ return f.space_id == S.currentSpace; })
+    .map(function(f) {
+      var kind = (f.field_type === 'select' || f.field_type === 'multi_select') ? 'multi'
+               : (f.field_type === 'date') ? 'cfdate'
+               : 'cftext';
+      var fd = { key: 'cf_' + f.id, label: f.name, kind: kind, cfId: f.id, cfType: f.field_type };
+      if (kind === 'multi') {
+        fd.opts = (Array.isArray(f.options) ? f.options : []).map(function(o){ return {v: o, l: o}; });
+      }
+      if (kind === 'cfdate') {
+        fd.fromKey = 'cf_' + f.id + '_from';
+        fd.toKey   = 'cf_' + f.id + '_to';
+      }
+      return fd;
+    });
+}
+
 function _awGetFieldDef(key) {
-  return AW_FILTER_FIELDS.find(function(f){ return f.key === key; });
+  var std = AW_FILTER_FIELDS.find(function(f){ return f.key === key; });
+  if (std) return std;
+  return _awGetCFFilterFields().find(function(f){ return f.key === key; });
 }
 
 function _awFieldHasValue(key) {
   var fd = _awGetFieldDef(key);
   if (!fd) return false;
-  if (fd.kind === 'multi') return S.awFilters[key] && S.awFilters[key].length > 0;
+  if (fd.kind === 'multi')  return S.awFilters[key] && S.awFilters[key].length > 0;
+  if (fd.kind === 'cfdate') return !!(S.awFilters[fd.fromKey] || S.awFilters[fd.toKey]);
+  if (fd.kind === 'cftext') return !!(S.awFilters[key]);
   return !!(S.awFilters[fd.fromKey] || S.awFilters[fd.toKey]);
 }
 
@@ -3525,16 +3549,22 @@ function _awRenderPanel() {
             '</div>' +
           '</div>' +
         '</div>';
+    } else if (fd.kind === 'cftext') {
+      var tv = S.awFilters[key] || '';
+      valueHtml =
+        '<input type="text" class="input input-sm" style="min-width:160px" value="' + esc(tv) + '" placeholder="Contains…"' +
+        ' oninput="window._awSetCFText(\'' + key + '\',this.value)">';
     } else {
+      // date / cfdate
       var fv = S.awFilters[fd.fromKey] || '';
-      var tv = S.awFilters[fd.toKey]   || '';
+      var tv2 = S.awFilters[fd.toKey]  || '';
       valueHtml =
         '<div class="aw-adv-date-row">' +
           '<span class="aw-adv-date-lbl">From</span>' +
           '<input type="date" class="input input-sm" value="' + esc(fv) + '" onchange="window._awSetDate(\'' + key + '\',\'from\',this.value)">' +
           '<span class="aw-adv-date-sep">–</span>' +
           '<span class="aw-adv-date-lbl">To</span>' +
-          '<input type="date" class="input input-sm" value="' + esc(tv) + '" onchange="window._awSetDate(\'' + key + '\',\'to\',this.value)">' +
+          '<input type="date" class="input input-sm" value="' + esc(tv2) + '" onchange="window._awSetDate(\'' + key + '\',\'to\',this.value)">' +
         '</div>';
     }
     return '<div class="aw-adv-row" id="aw-row-' + key + '">' +
@@ -3586,6 +3616,12 @@ window._awMultiToggle = function(key, cb) {
   renderAllWork();
 };
 
+// Set a CF text filter value
+window._awSetCFText = function(key, val) {
+  S.awFilters[key] = val;
+  renderAllWork();
+};
+
 // Set a date filter value
 window._awSetDate = function(key, which, val) {
   var fd = _awGetFieldDef(key);
@@ -3607,7 +3643,8 @@ window._awRemoveField = function(key) {
   _awActiveFields = _awActiveFields.filter(function(k){ return k !== key; });
   var fd = _awGetFieldDef(key);
   if (fd) {
-    if (fd.kind === 'multi') S.awFilters[key] = [];
+    if (fd.kind === 'multi')  { S.awFilters[key] = []; }
+    else if (fd.kind === 'cftext') { S.awFilters[key] = ''; }
     else { S.awFilters[fd.fromKey] = ''; S.awFilters[fd.toKey] = ''; }
   }
   _awRenderPanel();
@@ -3626,15 +3663,25 @@ window._awToggleAddDrop = function() {
 function _awRenderAddOpts(q) {
   var list = $('awAddDropList');
   if (!list) return;
-  var available = AW_FILTER_FIELDS.filter(function(fd) {
+  var cfFields = _awGetCFFilterFields();
+  var allFields = AW_FILTER_FIELDS.concat(cfFields);
+  var available = allFields.filter(function(fd) {
     return _awActiveFields.indexOf(fd.key) < 0 &&
       (!q || fd.label.toLowerCase().indexOf(q.toLowerCase()) >= 0);
   });
-  list.innerHTML = available.length
-    ? available.map(function(fd) {
-        return '<div class="aw-add-drop-item" onclick="window._awAddField(\'' + fd.key + '\')">' + esc(fd.label) + '</div>';
-      }).join('')
-    : '<div class="aw-add-drop-empty">No more filters</div>';
+  // Group: standard fields first, then custom fields with a divider
+  var stdAvail = available.filter(function(fd){ return fd.key.indexOf('cf_') !== 0; });
+  var cfAvail  = available.filter(function(fd){ return fd.key.indexOf('cf_') === 0; });
+  var html = stdAvail.map(function(fd){
+    return '<div class="aw-add-drop-item" onclick="window._awAddField(\'' + fd.key + '\')">' + esc(fd.label) + '</div>';
+  }).join('');
+  if (cfAvail.length) {
+    if (stdAvail.length) html += '<div class="aw-add-drop-divider">Custom Fields</div>';
+    html += cfAvail.map(function(fd){
+      return '<div class="aw-add-drop-item" onclick="window._awAddField(\'' + fd.key + '\')">' + esc(fd.label) + '</div>';
+    }).join('');
+  }
+  list.innerHTML = html || '<div class="aw-add-drop-empty">No more filters</div>';
 }
 
 window._awFilterAddOpts = function(q) { _awRenderAddOpts(q); };
@@ -3652,6 +3699,12 @@ window._awClearFilters = function() {
     createdFrom: '', createdTo: '', updatedFrom: '', updatedTo: '',
     dueDateFrom: '', dueDateTo: '', startDateFrom: '', startDateTo: ''
   };
+  // Clear any CF filter values
+  _awGetCFFilterFields().forEach(function(fd) {
+    if (fd.kind === 'multi')  S.awFilters[fd.key] = [];
+    else if (fd.kind === 'cftext') S.awFilters[fd.key] = '';
+    else { S.awFilters[fd.fromKey] = ''; S.awFilters[fd.toKey] = ''; }
+  });
   _awActiveFields = [];
   _awRenderPanel();
   renderAllWork();
@@ -3772,6 +3825,41 @@ function renderAllWork() {
   if (f.dueDateTo)     issues = issues.filter(function(i) { return i.due_date && i.due_date.slice(0,10) <= f.dueDateTo; });
   if (f.startDateFrom) issues = issues.filter(function(i) { return i.start_date && i.start_date.slice(0,10) >= f.startDateFrom; });
   if (f.startDateTo)   issues = issues.filter(function(i) { return i.start_date && i.start_date.slice(0,10) <= f.startDateTo; });
+  // Custom field filters
+  _awActiveFields.forEach(function(key) {
+    if (key.indexOf('cf_') !== 0) return;
+    var fd = _awGetFieldDef(key);
+    if (!fd) return;
+    if (fd.kind === 'multi' && S.awFilters[key] && S.awFilters[key].length) {
+      var allowed = S.awFilters[key];
+      issues = issues.filter(function(i) {
+        var cfv = (S.data.issue_field_values || []).find(function(v){ return v.issue_id == i.id && v.field_id == fd.cfId; });
+        if (!cfv || !cfv.value) return false;
+        // Value may be comma-separated (multi_select)
+        var vals = cfv.value.split(',').map(function(s){ return s.trim(); });
+        return allowed.some(function(a){ return vals.indexOf(a) >= 0; });
+      });
+    } else if (fd.kind === 'cftext' && S.awFilters[key]) {
+      var q = S.awFilters[key].toLowerCase();
+      issues = issues.filter(function(i) {
+        var cfv = (S.data.issue_field_values || []).find(function(v){ return v.issue_id == i.id && v.field_id == fd.cfId; });
+        return cfv && cfv.value && cfv.value.toLowerCase().indexOf(q) >= 0;
+      });
+    } else if (fd.kind === 'cfdate') {
+      if (S.awFilters[fd.fromKey]) {
+        issues = issues.filter(function(i) {
+          var cfv = (S.data.issue_field_values || []).find(function(v){ return v.issue_id == i.id && v.field_id == fd.cfId; });
+          return cfv && cfv.value && cfv.value.slice(0,10) >= S.awFilters[fd.fromKey];
+        });
+      }
+      if (S.awFilters[fd.toKey]) {
+        issues = issues.filter(function(i) {
+          var cfv = (S.data.issue_field_values || []).find(function(v){ return v.issue_id == i.id && v.field_id == fd.cfId; });
+          return cfv && cfv.value && cfv.value.slice(0,10) <= S.awFilters[fd.toKey];
+        });
+      }
+    }
+  });
 
   // Sort
   var col = S.allWorkSort.col;

@@ -4552,6 +4552,51 @@ function bindDrawerEdits(issue) {
     $('worklogBillable').checked = true;
     openModal('modal-worklog');
   };
+
+  // ⋯ Actions menu — Delete issue (owner only)
+  $('drawerActionsBtn').onclick = function (e) {
+    e.stopPropagation();
+    var existing = document.querySelector('.drawer-actions-menu');
+    if (existing) { existing.remove(); return; }
+
+    var isOwner = (S.currentUserObj || {}).role === 'owner' || (S.currentUserObj || {}).role === 'admin';
+
+    var menu = document.createElement('div');
+    menu.className = 'drawer-actions-menu';
+    menu.innerHTML = isOwner
+      ? '<div class="drawer-actions-item danger" id="drawerDeleteItem">🗑️ Delete issue</div>'
+      : '<div class="drawer-actions-item disabled" style="color:var(--text3);font-size:12px">No actions available</div>';
+
+    var rect = $('drawerActionsBtn').getBoundingClientRect();
+    menu.style.cssText = 'position:fixed;right:' + (window.innerWidth - rect.right) + 'px;top:' + (rect.bottom + 4) + 'px;' +
+      'background:var(--bg2);border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.15);z-index:9999;min-width:160px;padding:4px;';
+
+    document.body.appendChild(menu);
+
+    if (isOwner) {
+      document.getElementById('drawerDeleteItem').onclick = async function () {
+        menu.remove();
+        if (!confirm('Delete this issue? This cannot be undone.')) return;
+        try {
+          await api('/api/issues/' + issueId, 'DELETE');
+          closeDrawer();
+          await refreshData();
+          if (S.currentTab) renderTab(S.currentTab);
+          toast('Issue deleted');
+        } catch (err) {
+          toast('Failed to delete issue', 'error');
+        }
+      };
+    }
+
+    function closeMenu(ev) {
+      if (!menu.contains(ev.target) && ev.target !== $('drawerActionsBtn')) {
+        menu.remove();
+        document.removeEventListener('click', closeMenu);
+      }
+    }
+    setTimeout(function () { document.addEventListener('click', closeMenu); }, 0);
+  };
 }
 
 function renderDrawerSubtasks(subtasks) {

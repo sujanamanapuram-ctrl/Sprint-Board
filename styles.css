@@ -2745,7 +2745,7 @@ body.light .user-footer-actions .btn-icon:hover { color: #fff; background: rgba(
   padding: 12px 16px 8px; border-bottom: 1px solid var(--border);
   background: var(--bg2);
 }
-.aw-adv-rows { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+.aw-adv-rows { display: flex; flex-direction: row; flex-wrap: wrap; gap: 8px 16px; margin-bottom: 10px; align-items: center; }
 
 /* Each filter row */
 .aw-adv-row {

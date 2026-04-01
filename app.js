@@ -765,11 +765,12 @@ function renderSidebar() {
 
 function spaceNavItem(sp) {
   var active = S.currentSpace == sp.id ? ' active' : '';
+  var isOwner = canCreateSpace();
   return '<a class="nav-item space-item' + active + '" data-space-id="' + sp.id + '">' +
     '<span class="space-dot" style="background:' + (sp.color || '#174F96') + '"></span>' +
     '<span class="nav-icon">' + esc(sp.icon || '\uD83D\uDCC1') + '</span> ' +
     '<span class="space-item-name">' + esc(sp.name) + '</span>' +
-    '<button class="btn-icon space-item-menu-btn" data-space-menu-id="' + sp.id + '" title="More options">\u22EF</button>' +
+    (isOwner ? '<button class="btn-icon space-item-menu-btn" data-space-menu-id="' + sp.id + '" title="More options">\u22EF</button>' : '') +
     '</a>';
 }
 
@@ -5158,12 +5159,19 @@ function renderDrawerCustomFields(cfValues, issueId, spaceId) {
       inputHtml = '<input type="checkbox" data-cf-id="' + fid + '" ' + (val === 'true' ? 'checked' : '') + '>';
     } else if (ftype === 'select' || ftype === 'multi_select') {
       var mopts = (Array.isArray(field.options) ? field.options : (field.options || []));
-      var selected = val ? val.split(',').map(function(s){return s.trim();}) : [];
-      inputHtml = '<div class="cf-multiselect" data-cf-id="' + fid + '">' +
+      var selected = val ? val.split(',').map(function(s){return s.trim();}).filter(Boolean) : [];
+      var isMultiSel = ftype === 'multi_select';
+      var tagsHtml = selected.length
+        ? selected.map(function(s){ return '<span class="cf-sel-tag">' + esc(s) + '<span class="cf-sel-tag-x" data-val="' + esc(s) + '">×</span></span>'; }).join('')
+        : '<span class="cf-sel-placeholder">Select ' + (isMultiSel ? 'options' : 'an option') + '…</span>';
+      inputHtml = '<div class="cf-select-wrap" data-cf-id="' + fid + '" data-multi="' + (isMultiSel ? '1' : '0') + '" data-opts="' + esc(mopts.join(',')) + '">' +
+        '<div class="cf-select-trigger">' + tagsHtml + '<span class="cf-sel-arrow">▾</span></div>' +
+        '<div class="cf-select-dropdown" style="display:none">' +
         mopts.map(function(o) {
-          var chk = selected.indexOf(o) >= 0 ? ' checked' : '';
-          return '<label class="cf-ms-opt"><input type="checkbox" value="' + esc(o) + '"' + chk + '> ' + esc(o) + '</label>';
-        }).join('') + '</div>';
+          var sel = selected.indexOf(o) >= 0;
+          return '<div class="cf-sel-opt' + (sel ? ' selected' : '') + '" data-val="' + esc(o) + '">' +
+            '<span class="cf-sel-check">' + (sel ? '✓' : '') + '</span>' + esc(o) + '</div>';
+        }).join('') + '</div></div>';
     } else if (ftype === 'user') {
       var uopts = (S.data.users || [])
         .map(function(u) { return '<option value="' + u.id + '"' + (u.id == val ? ' selected' : '') + '>' + esc(u.name) + '</option>'; }).join('');
@@ -5181,7 +5189,7 @@ function renderDrawerCustomFields(cfValues, issueId, spaceId) {
   // Bind save-on-change for all inputs
   c.querySelectorAll('[data-cf-id]').forEach(function(el) {
     var fieldId = el.dataset.cfId;
-    var isMulti = el.classList.contains('cf-multiselect');
+    var isSelectWrap = el.classList.contains('cf-select-wrap');
     var saveTimer = null;
 
     function saveValue(value) {
@@ -5189,16 +5197,77 @@ function renderDrawerCustomFields(cfValues, issueId, spaceId) {
       saveTimer = setTimeout(function() {
         api('/api/issues/' + issueId + '/field-values/' + fieldId, 'PUT', { value: value })
           .catch(function() { toast('Failed to save field', 'error'); });
-      }, 600);
+      }, 400);
     }
 
-    if (isMulti) {
-      el.querySelectorAll('input[type="checkbox"]').forEach(function(cb) {
-        cb.addEventListener('change', function() {
-          var vals = Array.from(el.querySelectorAll('input:checked')).map(function(c){return c.value;});
-          saveValue(vals.join(','));
+    function rebuildTrigger(wrap, selArr) {
+      var trigger = wrap.querySelector('.cf-select-trigger');
+      var arrowHtml = '<span class="cf-sel-arrow">▾</span>';
+      var isMulti = wrap.dataset.multi === '1';
+      trigger.innerHTML = selArr.length
+        ? selArr.map(function(s){ return '<span class="cf-sel-tag">' + esc(s) + '<span class="cf-sel-tag-x" data-val="' + esc(s) + '">×</span></span>'; }).join('') + arrowHtml
+        : '<span class="cf-sel-placeholder">Select ' + (isMulti ? 'options' : 'an option') + '…</span>' + arrowHtml;
+      // Re-bind tag remove buttons
+      trigger.querySelectorAll('.cf-sel-tag-x').forEach(function(x) {
+        x.addEventListener('click', function(ev) {
+          ev.stopPropagation();
+          var v = x.dataset.val;
+          selArr = selArr.filter(function(s){ return s !== v; });
+          rebuildTrigger(wrap, selArr);
+          updateDropdownChecks(wrap, selArr);
+          saveValue(selArr.join(','));
         });
       });
+    }
+
+    function updateDropdownChecks(wrap, selArr) {
+      wrap.querySelectorAll('.cf-sel-opt').forEach(function(opt) {
+        var v = opt.dataset.val;
+        var sel = selArr.indexOf(v) >= 0;
+        opt.classList.toggle('selected', sel);
+        opt.querySelector('.cf-sel-check').textContent = sel ? '✓' : '';
+      });
+    }
+
+    if (isSelectWrap) {
+      var isMulti = el.dataset.multi === '1';
+      var selArr = Array.from(el.querySelectorAll('.cf-sel-opt.selected')).map(function(o){ return o.dataset.val; });
+
+      // Re-bind existing tag remove buttons
+      rebuildTrigger(el, selArr);
+
+      // Toggle dropdown on trigger click
+      var trigger = el.querySelector('.cf-select-trigger');
+      var dropdown = el.querySelector('.cf-select-dropdown');
+
+      trigger.addEventListener('click', function(ev) {
+        ev.stopPropagation();
+        var isOpen = dropdown.style.display !== 'none';
+        document.querySelectorAll('.cf-select-dropdown').forEach(function(d){ d.style.display = 'none'; });
+        dropdown.style.display = isOpen ? 'none' : 'block';
+      });
+
+      // Option click
+      el.querySelectorAll('.cf-sel-opt').forEach(function(opt) {
+        opt.addEventListener('click', function(ev) {
+          ev.stopPropagation();
+          var v = opt.dataset.val;
+          if (isMulti) {
+            var idx = selArr.indexOf(v);
+            if (idx >= 0) selArr.splice(idx, 1); else selArr.push(v);
+          } else {
+            selArr = [v];
+            dropdown.style.display = 'none';
+          }
+          rebuildTrigger(el, selArr);
+          updateDropdownChecks(el, selArr);
+          saveValue(selArr.join(','));
+        });
+      });
+
+      // Close on outside click
+      document.addEventListener('click', function() { dropdown.style.display = 'none'; });
+
     } else if (el.type === 'checkbox') {
       el.addEventListener('change', function() { saveValue(el.checked ? 'true' : 'false'); });
     } else {

@@ -2816,6 +2816,10 @@ body.light .aw-ms-panel { box-shadow: 0 4px 20px rgba(0,0,0,.10); }
 .prm-fullscreen .prm-header { flex-shrink:0; }
 .prm-fullscreen .prm-content { flex:1; overflow:auto; }
 
+/* Roadmap modal overlay — must sit above fullscreen (z-index 9990) */
+.modal-overlay { position:fixed; inset:0; z-index:10000; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.45); }
+.modal-box { background:var(--bg2); border:1px solid var(--border); border-radius:var(--radius-lg); width:520px; max-width:92vw; max-height:90vh; overflow:auto; box-shadow:0 8px 40px rgba(0,0,0,.28); animation:fadeIn .15s ease-out; }
+
 /* Bar hover tooltip */
 .prm-bar-tip { display:none; position:fixed; z-index:9999; background:var(--bg); border:1px solid var(--border); border-radius:10px; box-shadow:0 8px 32px rgba(0,0,0,.25); padding:14px 16px; width:280px; pointer-events:none; transition:none; }
 .prm-tip-title { font-size:14px; font-weight:700; color:var(--text); margin-bottom:8px; line-height:1.4; word-break:break-word; }

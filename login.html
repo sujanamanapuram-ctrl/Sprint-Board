@@ -69,29 +69,41 @@
       margin-bottom: 12px;
     }
 
-    .brand-name {
-      font-size: 18px;
-      font-weight: 700;
-      color: var(--accent-dark);
-    }
-
-    .brand-sub {
-      font-size: 12px;
-      color: var(--text2);
-      margin-top: 2px;
-    }
-
     h1 {
       font-size: 22px;
       font-weight: 700;
-      margin-bottom: 24px;
+      margin-bottom: 32px;
       text-align: center;
       color: var(--text);
     }
 
-    .form-group {
+    .error-msg {
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      border-radius: var(--radius);
+      padding: 10px 14px;
+      color: #dc2626;
+      font-size: 13px;
       margin-bottom: 16px;
+      display: none;
     }
+
+    .error-msg.show { display: block; }
+
+    .success-msg {
+      background: #f0fdf4;
+      border: 1px solid #bbf7d0;
+      border-radius: var(--radius);
+      padding: 10px 14px;
+      color: #16a34a;
+      font-size: 13px;
+      margin-bottom: 16px;
+      display: none;
+    }
+
+    .success-msg.show { display: block; }
+
+    .form-group { margin-bottom: 16px; }
 
     label {
       display: block;
@@ -145,37 +157,33 @@
     .btn-primary:hover { background: #1a5cb3; box-shadow: 0 4px 12px rgba(23,79,150,0.3); }
     .btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
 
-    .error-msg {
-      background: #fef2f2;
-      border: 1px solid #fecaca;
-      border-radius: var(--radius);
-      padding: 10px 14px;
-      color: #dc2626;
-      font-size: 13px;
-      margin-bottom: 16px;
-      display: none;
+    .ms-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      border: 1px solid #d1d5db;
+      border-radius: 8px;
+      padding: 14px 16px;
+      text-decoration: none;
+      color: #111827;
+      background: #fff;
+      font-weight: 600;
+      font-size: 15px;
+      width: 100%;
+      transition: background 0.15s, box-shadow 0.15s;
     }
 
-    .error-msg.show { display: block; }
+    .ms-btn:hover { background: #f9fafb; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
 
-    .success-msg {
-      background: #f0fdf4;
-      border: 1px solid #bbf7d0;
-      border-radius: var(--radius);
-      padding: 10px 14px;
-      color: #16a34a;
-      font-size: 13px;
-      margin-bottom: 16px;
-      display: none;
+    .ms-logo {
+      display: grid;
+      grid-template-columns: repeat(2, 10px);
+      grid-template-rows: repeat(2, 10px);
+      gap: 2px;
     }
 
-    .success-msg.show { display: block; }
-
-    .divider {
-      border: none;
-      border-top: 1px solid #e2e8f0;
-      margin: 24px 0;
-    }
+    .ms-logo span { display: block; width: 10px; height: 10px; }
 
     .hint {
       text-align: center;
@@ -186,18 +194,6 @@
 
     .hint a { color: var(--accent-dark); text-decoration: none; font-weight: 600; }
     .hint a:hover { text-decoration: underline; }
-
-    .default-creds {
-      background: #eff6ff;
-      border: 1px solid #bfdbfe;
-      border-radius: var(--radius);
-      padding: 12px;
-      font-size: 12px;
-      color: #3b82f6;
-      margin-top: 20px;
-    }
-
-    .default-creds strong { color: var(--accent-dark); }
 
     /* Panel sections */
     .panel { display: none; }
@@ -217,7 +213,8 @@
   <div id="loginPanel" class="panel active">
     <div class="login-card">
       <div class="logo-section">
-        <img src="assets/neutara-logo.png" class="logo-img" id="logoImg" onerror="this.style.display='none';document.getElementById('logoFallback').style.display='flex'">
+        <img src="assets/neutara-logo.png" class="logo-img" id="logoImg"
+             onerror="this.style.display='none';document.getElementById('logoFallback').style.display='flex'">
         <div class="logo-fallback" id="logoFallback">N</div>
       </div>
 
@@ -225,22 +222,15 @@
 
       <div id="loginError" class="error-msg"></div>
 
-      <form id="loginForm">
-        <div class="form-group">
-          <label for="loginEmail">Email address</label>
-          <input type="email" id="loginEmail" placeholder="you@neutara.dev" autocomplete="email" required>
-        </div>
-        <div class="form-group">
-          <label for="loginPassword">Password</label>
-          <input type="password" id="loginPassword" placeholder="Enter your password" autocomplete="current-password" required>
-        </div>
-        <button type="submit" class="btn btn-primary" id="loginBtn">Sign In</button>
-      </form>
-
-      <div class="default-creds">
-        <strong>Default credentials for seeded users:</strong><br>
-        Any seeded email (e.g. sarah@neutara.dev) with password: <strong>password123</strong>
-      </div>
+      <a href="/auth/microsoft" class="ms-btn">
+        <span class="ms-logo">
+          <span style="background:#f25022"></span>
+          <span style="background:#7fba00"></span>
+          <span style="background:#00a4ef"></span>
+          <span style="background:#ffb900"></span>
+        </span>
+        Sign in with Microsoft
+      </a>
     </div>
   </div>
 
@@ -252,30 +242,49 @@
       </div>
 
       <h1>Accept Your Invitation</h1>
-      <p style="text-align:center;font-size:13px;color:#64748b;margin-bottom:24px">You've been invited to join the workspace. Set your name and password to get started.</p>
+      <p style="text-align:center;font-size:13px;color:#64748b;margin-bottom:24px">
+        You've been invited to join the workspace. Set your name and password to get started.
+      </p>
 
       <div id="inviteError" class="error-msg"></div>
       <div id="inviteSuccess" class="success-msg"></div>
 
       <form id="inviteForm">
         <input type="hidden" id="inviteToken">
+
         <div class="form-group">
           <label for="inviteEmail">Email address</label>
           <input type="email" id="inviteEmail" placeholder="your@email.com" readonly style="opacity:0.7">
         </div>
+
         <div class="form-group">
           <label for="inviteName">Your full name</label>
           <input type="text" id="inviteName" placeholder="Jane Smith" required>
         </div>
+
         <div class="form-group">
           <label for="invitePassword">Set password</label>
           <input type="password" id="invitePassword" placeholder="Min 6 characters" required minlength="6">
         </div>
+
         <div class="form-group">
           <label for="invitePasswordConfirm">Confirm password</label>
           <input type="password" id="invitePasswordConfirm" placeholder="Repeat password" required>
         </div>
+
         <button type="submit" class="btn btn-primary" id="inviteBtn">Create Account &amp; Sign In</button>
+
+        <div style="margin-top:12px;">
+          <a id="inviteMicrosoftBtn" href="/auth/microsoft" class="ms-btn">
+            <span class="ms-logo">
+              <span style="background:#f25022"></span>
+              <span style="background:#7fba00"></span>
+              <span style="background:#00a4ef"></span>
+              <span style="background:#ffb900"></span>
+            </span>
+            Sign in with Microsoft
+          </a>
+        </div>
       </form>
 
       <div class="hint">
@@ -288,49 +297,68 @@
 
 <script>
   // Check if already logged in — but skip redirect if this is an invite link
-  (function() {
-    var hasInvite = new URLSearchParams(window.location.search).get('invite');
-    if (hasInvite) return; // Let the invite flow handle it
+  (function () {
+    var params = new URLSearchParams(window.location.search);
+    var hasInvite = params.get('invite');
+    if (hasInvite) return;
+
     var token = localStorage.getItem('sb-token');
     if (token) {
       fetch('/api/auth/me', { headers: { Authorization: 'Bearer ' + token } })
-        .then(function(r) { return r.ok ? r.json() : null; })
-        .then(function(user) {
-          if (user) window.location.href = '/';
-        }).catch(function(){});
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (user) { if (user) window.location.href = '/'; })
+        .catch(function () {});
     }
   })();
 
   // Check for invite token in URL — fetch invite details and pre-fill email
-  (async function() {
+  (async function () {
     var params = new URLSearchParams(window.location.search);
     var inviteToken = params.get('invite');
     if (!inviteToken) return;
 
-    document.getElementById('loginPanel').classList.remove('active');
-    document.getElementById('invitePanel').classList.add('active');
-    document.getElementById('inviteToken').value = inviteToken;
+    var loginPanel = document.getElementById('loginPanel');
+    var invitePanel = document.getElementById('invitePanel');
+    var inviteTokenField = document.getElementById('inviteToken');
+    var inviteEmailField = document.getElementById('inviteEmail');
+    var inviteNameField = document.getElementById('inviteName');
+    var inviteBtn = document.getElementById('inviteBtn');
+    var inviteError = document.getElementById('inviteError');
+    var inviteMicrosoftBtn = document.getElementById('inviteMicrosoftBtn');
+
+    if (loginPanel) loginPanel.classList.remove('active');
+    if (invitePanel) invitePanel.classList.add('active');
+    if (inviteTokenField) inviteTokenField.value = inviteToken;
+
+    if (inviteMicrosoftBtn) {
+      inviteMicrosoftBtn.href = '/auth/microsoft?mode=invite&invite=' + encodeURIComponent(inviteToken);
+    }
 
     try {
       var res = await fetch('/api/auth/invite/' + encodeURIComponent(inviteToken));
       var data = await res.json();
+
       if (!res.ok) {
-        var errEl = document.getElementById('inviteError');
-        errEl.textContent = data.error || 'Invalid or expired invitation.';
-        errEl.classList.add('show');
-        document.getElementById('inviteBtn').disabled = true;
-      } else {
-        document.getElementById('inviteEmail').value = data.email || '';
-        // Pre-fill name from email (part before @)
-        if (!document.getElementById('inviteName').value && data.email) {
-          var namePart = data.email.split('@')[0].replace(/[._\-]/g, ' ');
-          document.getElementById('inviteName').value = namePart.charAt(0).toUpperCase() + namePart.slice(1);
-        }
+        if (inviteError) { inviteError.textContent = data.error || 'Invalid or expired invitation.'; inviteError.classList.add('show'); }
+        if (inviteBtn) inviteBtn.disabled = true;
+        if (inviteMicrosoftBtn) { inviteMicrosoftBtn.style.pointerEvents = 'none'; inviteMicrosoftBtn.style.opacity = '0.6'; }
+        return;
+      }
+
+      if (inviteEmailField) inviteEmailField.value = data.email || '';
+
+      if (inviteNameField && !inviteNameField.value && data.email) {
+        var namePart = data.email.split('@')[0].replace(/[._\-]/g, ' ');
+        inviteNameField.value = namePart.charAt(0).toUpperCase() + namePart.slice(1);
+      }
+
+      if (inviteMicrosoftBtn && data.email) {
+        inviteMicrosoftBtn.href = '/auth/microsoft?mode=invite&invite=' + encodeURIComponent(inviteToken) + '&email=' + encodeURIComponent(data.email);
       }
     } catch (e) {
-      var errEl = document.getElementById('inviteError');
-      errEl.textContent = 'Could not load invitation details. Please try again.';
-      errEl.classList.add('show');
+      if (inviteError) { inviteError.textContent = 'Could not load invitation details. Please try again.'; inviteError.classList.add('show'); }
+      if (inviteBtn) inviteBtn.disabled = true;
+      if (inviteMicrosoftBtn) { inviteMicrosoftBtn.style.pointerEvents = 'none'; inviteMicrosoftBtn.style.opacity = '0.6'; }
     }
   })();
 
@@ -339,46 +367,10 @@
     document.getElementById('loginPanel').classList.add('active');
   }
 
-  // Login form
-  document.getElementById('loginForm').addEventListener('submit', async function(e) {
-    e.preventDefault();
-    var email = document.getElementById('loginEmail').value.trim();
-    var password = document.getElementById('loginPassword').value;
-    var btn = document.getElementById('loginBtn');
-    var errEl = document.getElementById('loginError');
-
-    btn.disabled = true;
-    btn.textContent = 'Signing in...';
-    errEl.classList.remove('show');
-
-    try {
-      var res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: email, password: password })
-      });
-      var data = await res.json();
-      if (!res.ok) {
-        errEl.textContent = data.error || 'Login failed';
-        errEl.classList.add('show');
-        btn.disabled = false;
-        btn.textContent = 'Sign In';
-        return;
-      }
-      localStorage.setItem('sb-token', data.token);
-      localStorage.setItem('sb-user', JSON.stringify(data.user));
-      window.location.href = '/';
-    } catch (err) {
-      errEl.textContent = 'Network error. Please try again.';
-      errEl.classList.add('show');
-      btn.disabled = false;
-      btn.textContent = 'Sign In';
-    }
-  });
-
   // Accept invite form
-  document.getElementById('inviteForm').addEventListener('submit', async function(e) {
+  document.getElementById('inviteForm').addEventListener('submit', async function (e) {
     e.preventDefault();
+
     var token = document.getElementById('inviteToken').value;
     var name = document.getElementById('inviteName').value.trim();
     var password = document.getElementById('invitePassword').value;
@@ -390,16 +382,8 @@
     errEl.classList.remove('show');
     sucEl.classList.remove('show');
 
-    if (password !== confirm) {
-      errEl.textContent = 'Passwords do not match.';
-      errEl.classList.add('show');
-      return;
-    }
-    if (password.length < 6) {
-      errEl.textContent = 'Password must be at least 6 characters.';
-      errEl.classList.add('show');
-      return;
-    }
+    if (password !== confirm) { errEl.textContent = 'Passwords do not match.'; errEl.classList.add('show'); return; }
+    if (password.length < 6) { errEl.textContent = 'Password must be at least 6 characters.'; errEl.classList.add('show'); return; }
 
     btn.disabled = true;
     btn.textContent = 'Creating account...';
@@ -410,7 +394,9 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token: token, name: name, password: password })
       });
+
       var data = await res.json();
+
       if (!res.ok) {
         errEl.textContent = data.error || 'Failed to accept invitation.';
         errEl.classList.add('show');
@@ -418,11 +404,12 @@
         btn.textContent = 'Create Account & Sign In';
         return;
       }
+
       localStorage.setItem('sb-token', data.token);
       localStorage.setItem('sb-user', JSON.stringify(data.user));
       sucEl.textContent = 'Account created! Redirecting...';
       sucEl.classList.add('show');
-      setTimeout(function() { window.location.href = '/'; }, 1200);
+      setTimeout(function () { window.location.href = '/'; }, 1200);
     } catch (err) {
       errEl.textContent = 'Network error. Please try again.';
       errEl.classList.add('show');

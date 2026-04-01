@@ -1018,8 +1018,16 @@ window._wlrToggle = function(type) {
   if (isHidden) { _wlrBuildPanel(type); panel.hidden = false; }
 };
 
-// Close wlr panels on outside click
+// Close advanced filter dropdowns + wlr panels on outside click
 document.addEventListener('click', function(e) {
+  // Close adv filter multi-drops
+  if (!e.target.closest('.aw-adv-val-wrap')) {
+    document.querySelectorAll('.aw-adv-multi-drop').forEach(function(d){ d.style.display = 'none'; });
+  }
+  // Close "+ Add filters" drop
+  if (!e.target.closest('#awAddFilterBtn') && !e.target.closest('#awAddDrop')) {
+    var addDrop = $('awAddDrop'); if (addDrop) addDrop.style.display = 'none';
+  }
   if (!e.target.closest('.aw-ms-wrap') && !e.target.closest('#wlrSpacePanel') && !e.target.closest('#wlrUserPanel')) {
     ['wlrSpacePanel','wlrUserPanel'].forEach(function(id){ var p=$(id); if(p) p.hidden=true; });
   }
@@ -3413,93 +3421,222 @@ function renderControlChart(c, data) {
 // ALL WORK TAB
 // ═══════════════════════════════════════════════════════════
 // Populate assignee + sprint filter dropdowns from live DB data
-// ── Multi-select filter helpers ──────────────────────────────────────
+// ── Advanced Filter Panel (Jira-style) ───────────────────────────────
 
-function _buildAwPanel(key, values, labelFn) {
-  var panel = $('msd-' + key + '-panel');
+// All available filter fields
+var AW_FILTER_FIELDS = [
+  { key: 'type',      label: 'Type',       kind: 'multi',
+    opts: [{v:'task',l:'Task'},{v:'bug',l:'Bug'},{v:'story',l:'Story'},{v:'epic',l:'Epic'},{v:'subtask',l:'Subtask'}] },
+  { key: 'status',    label: 'Status',     kind: 'multi',
+    opts: [{v:'To Do',l:'To Do'},{v:'In Progress',l:'In Progress'},{v:'In Review',l:'In Review'},{v:'Done',l:'Done'}] },
+  { key: 'priority',  label: 'Priority',   kind: 'multi',
+    opts: [{v:'critical',l:'Critical'},{v:'high',l:'High'},{v:'medium',l:'Medium'},{v:'low',l:'Low'}] },
+  { key: 'assignee',  label: 'Assignee',   kind: 'multi', opts: [] },
+  { key: 'sprint',    label: 'Sprint',     kind: 'multi', opts: [] },
+  { key: 'created',   label: 'Created',    kind: 'date',
+    fromKey: 'createdFrom',   toKey: 'createdTo' },
+  { key: 'updated',   label: 'Updated',    kind: 'date',
+    fromKey: 'updatedFrom',   toKey: 'updatedTo' },
+  { key: 'duedate',   label: 'Due Date',   kind: 'date',
+    fromKey: 'dueDateFrom',   toKey: 'dueDateTo' },
+  { key: 'startdate', label: 'Start Date', kind: 'date',
+    fromKey: 'startDateFrom', toKey: 'startDateTo' },
+];
+
+// Which fields are currently shown as rows in the panel
+var _awActiveFields = [];
+
+function _awGetFieldDef(key) {
+  return AW_FILTER_FIELDS.find(function(f){ return f.key === key; });
+}
+
+function _awFieldHasValue(key) {
+  var fd = _awGetFieldDef(key);
+  if (!fd) return false;
+  if (fd.kind === 'multi') return S.awFilters[key] && S.awFilters[key].length > 0;
+  return !!(S.awFilters[fd.fromKey] || S.awFilters[fd.toKey]);
+}
+
+function _awAnyActive() {
+  return _awActiveFields.some(_awFieldHasValue) ||
+    ($('allWorkSearch') && $('allWorkSearch').value.trim());
+}
+
+// Populate dynamic opts for assignee & sprint
+async function _awLoadDynamicOpts() {
+  var assigneeFd = _awGetFieldDef('assignee');
+  var sprintFd   = _awGetFieldDef('sprint');
+  try {
+    var members = await api('/api/spaces/' + S.currentSpace + '/members');
+    assigneeFd.opts = (members || []).map(function(m){ return {v: m.user_id, l: m.name}; });
+  } catch(_) {}
+  try {
+    var sprintRows = await api('/api/sprints?space_id=' + S.currentSpace);
+    sprintFd.opts = (sprintRows || []).map(function(sp){ return {v: sp.id, l: sp.name}; });
+  } catch(_) {
+    var sprints = (S.data.sprints || []).filter(function(sp){ return sp.space_id == S.currentSpace; });
+    sprintFd.opts = sprints.map(function(sp){ return {v: sp.id, l: sp.name}; });
+  }
+}
+
+// Toggle the filter panel open/closed
+window._awToggleFilterPanel = function() {
+  var panel = $('awAdvPanel');
+  var btn   = $('awFilterBtn');
   if (!panel) return;
-  panel.innerHTML = values.map(function(v) {
-    var label = labelFn ? labelFn(v) : v;
-    var checked = S.awFilters[key].indexOf(v) >= 0 ? ' checked' : '';
-    return '<label class="aw-ms-option"><input type="checkbox" value="' + esc(String(v)) + '"' + checked + ' onchange="window.onAwFilterCheck(\'' + key + '\',this)"> ' + esc(String(label)) + '</label>';
+  var open = panel.style.display === 'none' || panel.style.display === '';
+  panel.style.display = open ? 'block' : 'none';
+  if (btn) btn.classList.toggle('active', open);
+  if (open) _awRenderPanel();
+};
+
+// Render all active filter rows
+function _awRenderPanel() {
+  var rows = $('awAdvRows');
+  if (!rows) return;
+  rows.innerHTML = _awActiveFields.map(function(key) {
+    var fd = _awGetFieldDef(key);
+    if (!fd) return '';
+    var valueHtml = '';
+    if (fd.kind === 'multi') {
+      var sel = S.awFilters[key] || [];
+      var btnLabel = sel.length ? sel.map(function(v){
+        var o = fd.opts.find(function(o){ return o.v == v; });
+        return o ? o.l : v;
+      }).join(', ') : 'Any';
+      valueHtml =
+        '<div class="aw-adv-val-wrap" style="position:relative">' +
+          '<button class="aw-adv-val-btn" onclick="window._awToggleMultiDrop(\'' + key + '\')">' +
+            esc(btnLabel) + ' <span class="aw-adv-val-arrow">▾</span>' +
+          '</button>' +
+          '<div class="aw-adv-multi-drop" id="aw-mdrop-' + key + '" style="display:none">' +
+            '<input class="aw-adv-drop-search" type="text" placeholder="Search…" oninput="window._awFilterMultiSearch(\'' + key + '\',this.value)">' +
+            '<div class="aw-adv-opts" id="aw-mopts-' + key + '">' +
+              fd.opts.map(function(o) {
+                var chk = sel.indexOf(o.v) >= 0 ? ' checked' : '';
+                return '<label class="aw-adv-opt-row"><input type="checkbox" value="' + esc(String(o.v)) + '"' + chk +
+                  ' onchange="window._awMultiToggle(\'' + key + '\',this)"> ' + esc(o.l) + '</label>';
+              }).join('') +
+            '</div>' +
+          '</div>' +
+        '</div>';
+    } else {
+      var fv = S.awFilters[fd.fromKey] || '';
+      var tv = S.awFilters[fd.toKey]   || '';
+      valueHtml =
+        '<div class="aw-adv-date-row">' +
+          '<span class="aw-adv-date-lbl">From</span>' +
+          '<input type="date" class="input input-sm" value="' + esc(fv) + '" onchange="window._awSetDate(\'' + key + '\',\'from\',this.value)">' +
+          '<span class="aw-adv-date-sep">–</span>' +
+          '<span class="aw-adv-date-lbl">To</span>' +
+          '<input type="date" class="input input-sm" value="' + esc(tv) + '" onchange="window._awSetDate(\'' + key + '\',\'to\',this.value)">' +
+        '</div>';
+    }
+    return '<div class="aw-adv-row" id="aw-row-' + key + '">' +
+      '<span class="aw-adv-field-label">' + esc(fd.label) + '</span>' +
+      '<span class="aw-adv-op">=</span>' +
+      valueHtml +
+      '<button class="aw-adv-remove" onclick="window._awRemoveField(\'' + key + '\')" title="Remove filter">×</button>' +
+    '</div>';
   }).join('');
 }
 
-function _updateAwBadge(key) {
-  var cnt = $('msd-' + key + '-count');
-  var n = S.awFilters[key].length;
-  if (cnt) { cnt.textContent = n; cnt.hidden = n === 0; }
-  var btn = document.querySelector('#msd-' + key + ' .aw-ms-btn');
-  if (btn) btn.classList.toggle('active', n > 0);
-}
+// Toggle a multi-select dropdown open/close
+window._awToggleMultiDrop = function(key) {
+  var drop = $('aw-mdrop-' + key);
+  if (!drop) return;
+  var open = drop.style.display === 'none';
+  // Close all multi-drops first
+  document.querySelectorAll('.aw-adv-multi-drop').forEach(function(d){ d.style.display = 'none'; });
+  drop.style.display = open ? 'block' : 'none';
+};
 
-// Badge for date filter buttons: shows a dot when any date is set
-function _updateDateBadge(panelKey, fromKey, toKey) {
-  var active = !!(S.awFilters[fromKey] || S.awFilters[toKey]);
-  var cnt = $('msd-' + panelKey + '-count');
-  if (cnt) { cnt.textContent = '✓'; cnt.hidden = !active; }
-  var btn = document.querySelector('#msd-' + panelKey + ' .aw-ms-btn');
-  if (btn) btn.classList.toggle('active', active);
-}
+// Filter options in multi-select dropdown by search text
+window._awFilterMultiSearch = function(key, q) {
+  var opts = $('aw-mopts-' + key);
+  if (!opts) return;
+  opts.querySelectorAll('.aw-adv-opt-row').forEach(function(row) {
+    var txt = row.textContent.toLowerCase();
+    row.style.display = !q || txt.indexOf(q.toLowerCase()) >= 0 ? '' : 'none';
+  });
+};
 
-window.onAwFilterCheck = function(key, cb) {
-  var arr = S.awFilters[key];
+// Toggle a value in a multi-select filter
+window._awMultiToggle = function(key, cb) {
+  var arr = S.awFilters[key] || (S.awFilters[key] = []);
   if (cb.checked) { if (arr.indexOf(cb.value) < 0) arr.push(cb.value); }
   else { var idx = arr.indexOf(cb.value); if (idx >= 0) arr.splice(idx, 1); }
-  _updateAwBadge(key);
+  // Update button label
+  var row = $('aw-row-' + key);
+  if (row) {
+    var fd = _awGetFieldDef(key);
+    var sel = S.awFilters[key];
+    var lbl = sel.length ? sel.map(function(v){
+      var o = fd.opts.find(function(o){ return o.v == v; });
+      return o ? o.l : v;
+    }).join(', ') : 'Any';
+    var btn = row.querySelector('.aw-adv-val-btn');
+    if (btn) btn.childNodes[0].nodeValue = lbl + ' ';
+  }
   renderAllWork();
 };
 
-window.toggleAwDropdown = function(key) {
-  var panel = $('msd-' + key + '-panel');
-  if (!panel) return;
-  var isHidden = panel.hidden;
-  // Close all panels first
-  document.querySelectorAll('.aw-ms-panel').forEach(function(p) { p.hidden = true; });
-  panel.hidden = !isHidden;
+// Set a date filter value
+window._awSetDate = function(key, which, val) {
+  var fd = _awGetFieldDef(key);
+  if (!fd) return;
+  S.awFilters[which === 'from' ? fd.fromKey : fd.toKey] = val;
+  renderAllWork();
 };
 
-window.toggleAwDates = function() {
-  var row = $('awDateRow');
-  if (row) row.hidden = !row.hidden;
-  var btn = $('awDateToggle');
-  if (btn) btn.classList.toggle('active', row && !row.hidden);
+// Add a field to the panel
+window._awAddField = function(key) {
+  if (_awActiveFields.indexOf(key) < 0) _awActiveFields.push(key);
+  _awRenderPanel();
+  $('awAddDrop').style.display = 'none';
+  renderAllWork();
 };
 
-async function _initAwMultiSelects() {
-  // Static panels
-  _buildAwPanel('type', ['task','bug','story','epic','subtask'], function(v) {
-    return v.charAt(0).toUpperCase() + v.slice(1);
-  });
-  _buildAwPanel('status', ['To Do','In Progress','In Review','Done']);
-  _buildAwPanel('priority', ['critical','high','medium','low'], function(v) {
-    return v.charAt(0).toUpperCase() + v.slice(1);
-  });
-  // Dynamic: assignee (from DB)
-  try {
-    var members = await api('/api/spaces/' + S.currentSpace + '/members');
-    var memberMap = {};
-    (members || []).forEach(function(m) { memberMap[m.user_id] = m.name; });
-    _buildAwPanel('assignee', (members || []).map(function(m) { return m.user_id; }), function(v) {
-      return memberMap[v] || v;
-    });
-  } catch(_) {}
-  // Dynamic: sprints (fetch fresh from DB)
-  try {
-    var sprintRows = await api('/api/sprints?space_id=' + S.currentSpace);
-    var sprintMap = {};
-    (sprintRows || []).forEach(function(sp) { sprintMap[sp.id] = sp.name; });
-    _buildAwPanel('sprint', (sprintRows || []).map(function(sp) { return sp.id; }), function(v) {
-      return sprintMap[v] || v;
-    });
-  } catch(_) {
-    var sprints = (S.data.sprints || []).filter(function(sp) { return sp.space_id == S.currentSpace; });
-    var sprintMap2 = {};
-    sprints.forEach(function(sp) { sprintMap2[sp.id] = sp.name; });
-    _buildAwPanel('sprint', sprints.map(function(sp) { return sp.id; }), function(v) { return sprintMap2[v] || v; });
+// Remove a field from the panel and clear its filter
+window._awRemoveField = function(key) {
+  _awActiveFields = _awActiveFields.filter(function(k){ return k !== key; });
+  var fd = _awGetFieldDef(key);
+  if (fd) {
+    if (fd.kind === 'multi') S.awFilters[key] = [];
+    else { S.awFilters[fd.fromKey] = ''; S.awFilters[fd.toKey] = ''; }
   }
-  // Update badges for any pre-existing selections
-  ['type','status','priority','assignee','sprint'].forEach(_updateAwBadge);
+  _awRenderPanel();
+  renderAllWork();
+};
+
+// Toggle the "+ Add filters" dropdown
+window._awToggleAddDrop = function() {
+  var drop = $('awAddDrop');
+  if (!drop) return;
+  var open = drop.style.display === 'none';
+  drop.style.display = open ? 'block' : 'none';
+  if (open) { _awRenderAddOpts(''); var srch = $('awAddDropSearch'); if (srch) { srch.value = ''; srch.focus(); } }
+};
+
+function _awRenderAddOpts(q) {
+  var list = $('awAddDropList');
+  if (!list) return;
+  var available = AW_FILTER_FIELDS.filter(function(fd) {
+    return _awActiveFields.indexOf(fd.key) < 0 &&
+      (!q || fd.label.toLowerCase().indexOf(q.toLowerCase()) >= 0);
+  });
+  list.innerHTML = available.length
+    ? available.map(function(fd) {
+        return '<div class="aw-add-drop-item" onclick="window._awAddField(\'' + fd.key + '\')">' + esc(fd.label) + '</div>';
+      }).join('')
+    : '<div class="aw-add-drop-empty">No more filters</div>';
+}
+
+window._awFilterAddOpts = function(q) { _awRenderAddOpts(q); };
+
+// Init: load dynamic data (called when allwork view opens)
+async function _initAwMultiSelects() {
+  await _awLoadDynamicOpts();
 }
 
 window._awClearFilters = function() {
@@ -3510,16 +3647,8 @@ window._awClearFilters = function() {
     createdFrom: '', createdTo: '', updatedFrom: '', updatedTo: '',
     dueDateFrom: '', dueDateTo: '', startDateFrom: '', startDateTo: ''
   };
-  ['awCreatedFrom','awCreatedTo','awUpdatedFrom','awUpdatedTo',
-   'awDueDateFrom','awDueDateTo','awStartDateFrom','awStartDateTo'].forEach(function(id) {
-    var el = $(id); if (el) el.value = '';
-  });
-  // Reset date badges
-  [['created','createdFrom','createdTo'],['updated','updatedFrom','updatedTo'],
-   ['duedate','dueDateFrom','dueDateTo'],['startdate','startDateFrom','startDateTo']].forEach(function(d){
-    _updateDateBadge(d[0], d[1], d[2]);
-  });
-  _initAwMultiSelects();
+  _awActiveFields = [];
+  _awRenderPanel();
   renderAllWork();
 };
 

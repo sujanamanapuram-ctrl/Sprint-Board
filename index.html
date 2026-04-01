@@ -443,86 +443,26 @@
         <div class="view" id="view-allwork" hidden>
           <!-- Filter bar -->
           <div class="aw-filter-bar">
-            <input type="text" class="input input-sm" id="allWorkSearch" placeholder="🔍 Search title, key..." style="width:180px">
-
-            <div class="aw-ms-wrap" id="msd-type">
-              <button class="aw-ms-btn" onclick="window.toggleAwDropdown('type')">All Types <span class="aw-ms-count" id="msd-type-count" hidden></span><span class="aw-ms-arrow">▾</span></button>
-              <div class="aw-ms-panel" id="msd-type-panel" hidden></div>
-            </div>
-
-            <div class="aw-ms-wrap" id="msd-status">
-              <button class="aw-ms-btn" onclick="window.toggleAwDropdown('status')">All Statuses <span class="aw-ms-count" id="msd-status-count" hidden></span><span class="aw-ms-arrow">▾</span></button>
-              <div class="aw-ms-panel" id="msd-status-panel" hidden></div>
-            </div>
-
-            <div class="aw-ms-wrap" id="msd-priority">
-              <button class="aw-ms-btn" onclick="window.toggleAwDropdown('priority')">All Priorities <span class="aw-ms-count" id="msd-priority-count" hidden></span><span class="aw-ms-arrow">▾</span></button>
-              <div class="aw-ms-panel" id="msd-priority-panel" hidden></div>
-            </div>
-
-            <div class="aw-ms-wrap" id="msd-assignee">
-              <button class="aw-ms-btn" onclick="window.toggleAwDropdown('assignee')">Assignee <span class="aw-ms-count" id="msd-assignee-count" hidden></span><span class="aw-ms-arrow">▾</span></button>
-              <div class="aw-ms-panel" id="msd-assignee-panel" hidden></div>
-            </div>
-
-            <div class="aw-ms-wrap" id="msd-sprint">
-              <button class="aw-ms-btn" onclick="window.toggleAwDropdown('sprint')">All Sprints <span class="aw-ms-count" id="msd-sprint-count" hidden></span><span class="aw-ms-arrow">▾</span></button>
-              <div class="aw-ms-panel" id="msd-sprint-panel" hidden></div>
-            </div>
-
-            <div class="aw-ms-wrap" id="msd-created">
-              <button class="aw-ms-btn" onclick="window.toggleAwDropdown('created')">Created <span class="aw-ms-count" id="msd-created-count" hidden></span><span class="aw-ms-arrow">▾</span></button>
-              <div class="aw-ms-panel aw-date-panel" id="msd-created-panel" hidden>
-                <div class="aw-date-range">
-                  <span class="aw-date-range-label">From</span>
-                  <input type="date" class="input input-sm" id="awCreatedFrom">
-                  <span class="aw-date-range-sep">–</span>
-                  <span class="aw-date-range-label">To</span>
-                  <input type="date" class="input input-sm" id="awCreatedTo">
+            <input type="text" class="input input-sm" id="allWorkSearch" placeholder="🔍 Search title, key..." style="width:200px" oninput="renderAllWork()">
+            <button class="aw-filter-toggle-btn" id="awFilterBtn" onclick="window._awToggleFilterPanel()">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="margin-right:5px"><path d="M1 3h14v1.5L9 10v5l-2-1V10L1 4.5V3z"/></svg>Filter
+            </button>
+            <button class="btn btn-outline btn-sm" id="awClearFilters" style="display:none" onclick="window._awClearFilters()">✕ Clear all</button>
+          </div>
+          <!-- Advanced Filter Panel -->
+          <div class="aw-adv-panel" id="awAdvPanel" style="display:none">
+            <div class="aw-adv-rows" id="awAdvRows"></div>
+            <div class="aw-adv-footer">
+              <div style="position:relative">
+                <button class="aw-add-filter-btn" id="awAddFilterBtn" onclick="window._awToggleAddDrop()">+ Add filters</button>
+                <div class="aw-add-drop" id="awAddDrop" style="display:none">
+                  <div class="aw-add-drop-search-wrap">
+                    <input class="aw-add-drop-search" id="awAddDropSearch" type="text" placeholder="Search more filters" oninput="window._awFilterAddOpts(this.value)">
+                  </div>
+                  <div class="aw-add-drop-list" id="awAddDropList"></div>
                 </div>
               </div>
             </div>
-
-            <div class="aw-ms-wrap" id="msd-updated">
-              <button class="aw-ms-btn" onclick="window.toggleAwDropdown('updated')">Updated <span class="aw-ms-count" id="msd-updated-count" hidden></span><span class="aw-ms-arrow">▾</span></button>
-              <div class="aw-ms-panel aw-date-panel" id="msd-updated-panel" hidden>
-                <div class="aw-date-range">
-                  <span class="aw-date-range-label">From</span>
-                  <input type="date" class="input input-sm" id="awUpdatedFrom">
-                  <span class="aw-date-range-sep">–</span>
-                  <span class="aw-date-range-label">To</span>
-                  <input type="date" class="input input-sm" id="awUpdatedTo">
-                </div>
-              </div>
-            </div>
-
-            <div class="aw-ms-wrap" id="msd-duedate">
-              <button class="aw-ms-btn" onclick="window.toggleAwDropdown('duedate')">Due Date <span class="aw-ms-count" id="msd-duedate-count" hidden></span><span class="aw-ms-arrow">▾</span></button>
-              <div class="aw-ms-panel aw-date-panel" id="msd-duedate-panel" hidden>
-                <div class="aw-date-range">
-                  <span class="aw-date-range-label">From</span>
-                  <input type="date" class="input input-sm" id="awDueDateFrom">
-                  <span class="aw-date-range-sep">–</span>
-                  <span class="aw-date-range-label">To</span>
-                  <input type="date" class="input input-sm" id="awDueDateTo">
-                </div>
-              </div>
-            </div>
-
-            <div class="aw-ms-wrap" id="msd-startdate">
-              <button class="aw-ms-btn" onclick="window.toggleAwDropdown('startdate')">Start Date <span class="aw-ms-count" id="msd-startdate-count" hidden></span><span class="aw-ms-arrow">▾</span></button>
-              <div class="aw-ms-panel aw-date-panel" id="msd-startdate-panel" hidden>
-                <div class="aw-date-range">
-                  <span class="aw-date-range-label">From</span>
-                  <input type="date" class="input input-sm" id="awStartDateFrom">
-                  <span class="aw-date-range-sep">–</span>
-                  <span class="aw-date-range-label">To</span>
-                  <input type="date" class="input input-sm" id="awStartDateTo">
-                </div>
-              </div>
-            </div>
-
-            <button class="btn btn-outline btn-sm" id="awClearFilters" style="display:none" onclick="window._awClearFilters()">✕ Clear</button>
           </div>
 
           <div id="allWorkTable" class="table-container"></div>

@@ -2724,53 +2724,113 @@ body.light .user-footer-actions .btn-icon:hover { color: #fff; background: rgba(
   }
 }
 
-/* ── All Work: Jira-style Multi-Select Filters ─────────────────────── */
+/* ── All Work: Advanced Filter Bar ─────────────────────────────────── */
 .aw-filter-bar {
-  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   padding: 10px 16px; border-bottom: 1px solid var(--border);
 }
 
-.aw-ms-wrap { position: relative; }
-
-.aw-ms-btn {
-  display: inline-flex; align-items: center; gap: 4px;
-  padding: 5px 10px; border: 1px solid var(--border);
-  border-radius: var(--radius); background: var(--bg2);
-  color: var(--text1); cursor: pointer; font-size: 13px;
-  white-space: nowrap; transition: border-color .15s, background .15s;
+/* Filter toggle button */
+.aw-filter-toggle-btn {
+  display: inline-flex; align-items: center; padding: 5px 12px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg2); color: var(--text2); cursor: pointer;
+  font-size: 13px; font-weight: 500; transition: border-color .15s, background .15s;
 }
-.aw-ms-btn:hover { border-color: var(--accent); background: var(--bg3); }
-.aw-ms-btn.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--bg2)); }
-.aw-ms-arrow { font-size: 10px; margin-left: 2px; color: var(--text3); }
-.aw-ms-count {
-  background: var(--accent); color: #fff;
-  border-radius: 10px; padding: 1px 6px;
-  font-size: 11px; font-weight: 600; min-width: 18px; text-align: center;
-}
+.aw-filter-toggle-btn:hover { border-color: var(--accent); background: var(--bg3); color: var(--text); }
+.aw-filter-toggle-btn.active { border-color: var(--accent); background: rgba(37,99,235,.08); color: var(--accent); }
 
-.aw-ms-panel {
-  position: absolute; top: calc(100% + 4px); left: 0;
-  min-width: 200px; max-height: 280px; overflow-y: auto;
-  background: var(--bg2); border: 1px solid var(--border);
-  border-radius: var(--radius); box-shadow: 0 4px 20px rgba(0,0,0,.18);
-  z-index: 9000; padding: 4px 0;
+/* Advanced filter panel */
+.aw-adv-panel {
+  padding: 12px 16px 8px; border-bottom: 1px solid var(--border);
+  background: var(--bg2);
 }
-body.light .aw-ms-panel { box-shadow: 0 4px 20px rgba(0,0,0,.10); }
+.aw-adv-rows { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
 
-.aw-ms-option {
-  display: flex; align-items: center; gap: 8px;
-  padding: 7px 12px; cursor: pointer; font-size: 13px;
-  user-select: none; white-space: nowrap;
+/* Each filter row */
+.aw-adv-row {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
 }
-.aw-ms-option:hover { background: var(--bg3); }
-.aw-ms-option input[type="checkbox"] { cursor: pointer; accent-color: var(--accent); flex-shrink: 0; width: 14px; height: 14px; }
+.aw-adv-field-label {
+  min-width: 90px; font-size: 13px; font-weight: 600; color: var(--text2);
+}
+.aw-adv-op {
+  font-size: 13px; color: var(--text3); padding: 4px 8px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg3); font-weight: 500; min-width: 34px; text-align: center;
+}
+.aw-adv-val-wrap { position: relative; }
+.aw-adv-val-btn {
+  display: inline-flex; align-items: center; gap: 4px; padding: 5px 10px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg); color: var(--text); cursor: pointer; font-size: 13px;
+  min-width: 140px; max-width: 320px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  transition: border-color .1s;
+}
+.aw-adv-val-btn:hover { border-color: var(--accent); }
+.aw-adv-val-arrow { font-size: 10px; color: var(--text3); margin-left: auto; }
 
-/* Date filter dropdown panel */
-.aw-date-panel { min-width: 290px !important; overflow: visible !important; max-height: none !important; }
-.aw-date-range { display: flex; align-items: center; gap: 6px; padding: 10px 12px; flex-wrap: wrap; }
-.aw-date-range-label { font-size: 12px; color: var(--text3); font-weight: 500; white-space: nowrap; }
-.aw-date-range-sep { color: var(--text3); }
-.aw-date-range .input { width: 128px; font-size: 12px; padding: 4px 6px; }
+/* Multi-select dropdown inside row */
+.aw-adv-multi-drop {
+  position: absolute; top: calc(100% + 4px); left: 0; min-width: 220px;
+  background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: 0 4px 20px rgba(0,0,0,.18); z-index: 9100;
+}
+.aw-adv-drop-search {
+  width: 100%; padding: 8px 10px; border: none; border-bottom: 1px solid var(--border);
+  background: var(--bg); color: var(--text); font-size: 13px; outline: none; border-radius: var(--radius) var(--radius) 0 0;
+}
+.aw-adv-opts { max-height: 200px; overflow-y: auto; padding: 4px 0; }
+.aw-adv-opt-row {
+  display: flex; align-items: center; gap: 8px; padding: 7px 12px;
+  cursor: pointer; font-size: 13px; user-select: none;
+}
+.aw-adv-opt-row:hover { background: var(--bg3); }
+.aw-adv-opt-row input[type="checkbox"] { cursor: pointer; accent-color: var(--accent); width: 14px; height: 14px; flex-shrink: 0; }
+
+/* Date range row inside filter */
+.aw-adv-date-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.aw-adv-date-lbl { font-size: 12px; color: var(--text3); font-weight: 500; }
+.aw-adv-date-sep { color: var(--text3); }
+.aw-adv-date-row .input { width: 130px; font-size: 12px; padding: 4px 6px; }
+
+/* Remove button */
+.aw-adv-remove {
+  background: none; border: none; cursor: pointer; font-size: 18px; line-height: 1;
+  color: var(--text3); padding: 2px 4px; border-radius: var(--radius);
+  transition: color .1s; flex-shrink: 0;
+}
+.aw-adv-remove:hover { color: var(--danger); }
+
+/* Footer: + Add filters */
+.aw-adv-footer { display: flex; align-items: center; justify-content: space-between; }
+.aw-add-filter-btn {
+  display: inline-flex; align-items: center; gap: 4px; padding: 5px 12px;
+  border: 1.5px dashed var(--accent); border-radius: var(--radius);
+  background: none; color: var(--accent); cursor: pointer; font-size: 13px; font-weight: 500;
+  transition: background .1s;
+}
+.aw-add-filter-btn:hover { background: rgba(37,99,235,.07); }
+
+/* + Add filters dropdown */
+.aw-add-drop {
+  position: absolute; top: calc(100% + 4px); left: 0; width: 260px;
+  background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: 0 4px 20px rgba(0,0,0,.18); z-index: 9100;
+}
+.aw-add-drop-search-wrap { padding: 8px; border-bottom: 1px solid var(--border); }
+.aw-add-drop-search {
+  width: 100%; padding: 7px 10px; border: 1.5px solid var(--border); border-radius: var(--radius);
+  background: var(--bg); color: var(--text); font-size: 13px; outline: none;
+}
+.aw-add-drop-search:focus { border-color: var(--accent); }
+.aw-add-drop-list { max-height: 240px; overflow-y: auto; padding: 4px 0; }
+.aw-add-drop-item {
+  display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+  cursor: pointer; font-size: 13px; color: var(--text);
+}
+.aw-add-drop-item:hover { background: var(--bg3); }
+.aw-add-drop-empty { padding: 12px; font-size: 13px; color: var(--text3); text-align: center; }
 
 /* ── Bulk Action Bar ─────────────────────────────────────── */
 .bulk-bar {

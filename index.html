@@ -324,11 +324,11 @@
                 <span id="prmNavLabel" class="prm-nav-label">2026</span>
                 <button class="prm-nav-arrow" onclick="window._prmNavNext()" title="Next">&#8250;</button>
               </div>
-              <div class="prm-zoom-toggle">
-                <button class="prm-zoom-btn active" data-zoom="quarter" onclick="window._prmSetZoom('quarter')">Quarter</button>
-                <button class="prm-zoom-btn" data-zoom="month" onclick="window._prmSetZoom('month')">Month</button>
-                <button class="prm-zoom-btn" data-zoom="week" onclick="window._prmSetZoom('week')">Week</button>
-              </div>
+              <select id="prmZoomSelect" class="input input-sm" onchange="window._prmSetZoom(this.value)">
+                <option value="quarter">Quarter</option>
+                <option value="month">Month</option>
+                <option value="week">Week</option>
+              </select>
               <select id="prmFilterSpace" class="input input-sm" onchange="window._prmLoad()">
                 <option value="">All Spaces</option>
               </select>

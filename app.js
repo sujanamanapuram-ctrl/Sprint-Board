@@ -1086,9 +1086,8 @@ function _prmGetAnchor() {
 window._prmSetZoom = function(z) {
   _prmZoom = z;
   _prmNavAnchor = null; // reset to auto (today context)
-  document.querySelectorAll('.prm-zoom-btn').forEach(function(b){
-    b.classList.toggle('active', b.dataset.zoom === z);
-  });
+  var sel = $('prmZoomSelect');
+  if (sel && sel.value !== z) sel.value = z;
   _prmRender();
 };
 

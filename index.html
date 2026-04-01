@@ -319,7 +319,16 @@
               </div>
             </div>
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-              <select id="prmFilterYear" class="input input-sm" onchange="window._prmRender()"></select>
+              <div class="prm-nav-bar">
+                <button class="prm-nav-arrow" onclick="window._prmNavPrev()" title="Previous">&#8249;</button>
+                <span id="prmNavLabel" class="prm-nav-label">2026</span>
+                <button class="prm-nav-arrow" onclick="window._prmNavNext()" title="Next">&#8250;</button>
+              </div>
+              <div class="prm-zoom-toggle">
+                <button class="prm-zoom-btn active" data-zoom="quarter" onclick="window._prmSetZoom('quarter')">Quarter</button>
+                <button class="prm-zoom-btn" data-zoom="month" onclick="window._prmSetZoom('month')">Month</button>
+                <button class="prm-zoom-btn" data-zoom="week" onclick="window._prmSetZoom('week')">Week</button>
+              </div>
               <select id="prmFilterSpace" class="input input-sm" onchange="window._prmLoad()">
                 <option value="">All Spaces</option>
               </select>
@@ -328,11 +337,6 @@
                 <option value="space">Group by Space</option>
                 <option value="priority">Group by Priority</option>
                 <option value="assigned">Group by Assignee</option>
-              </select>
-              <select id="prmZoom" class="input input-sm" onchange="window._prmRender()">
-                <option value="month">Monthly</option>
-                <option value="quarter">Quarterly</option>
-                <option value="week">Weekly</option>
               </select>
               <select id="prmFilterStatus" class="input input-sm" onchange="window._prmRender()">
                 <option value="">All Statuses</option>

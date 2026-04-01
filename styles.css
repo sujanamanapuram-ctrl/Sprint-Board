@@ -2798,6 +2798,19 @@ body.light .aw-ms-panel { box-shadow: 0 4px 20px rgba(0,0,0,.10); }
 .prm-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 20px 12px; border-bottom: 1px solid var(--border); flex-wrap: wrap; background: var(--bg2); }
 .prm-content { flex: 1; overflow: auto; padding: 16px 20px; }
 
+/* Nav bar (< Year >) */
+.prm-nav-bar { display: flex; align-items: center; gap: 2px; }
+.prm-nav-arrow { background: none; border: 1px solid var(--border); border-radius: var(--radius); padding: 3px 9px; cursor: pointer; font-size: 18px; line-height: 1; color: var(--text2); transition: background .1s; }
+.prm-nav-arrow:hover { background: var(--bg3); color: var(--text); }
+.prm-nav-label { font-weight: 700; font-size: 14px; min-width: 48px; text-align: center; color: var(--text); padding: 0 4px; }
+
+/* Quarter / Month / Week toggle */
+.prm-zoom-toggle { display: flex; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.prm-zoom-btn { padding: 5px 13px; font-size: 12px; font-weight: 500; background: var(--bg2); border: none; border-right: 1px solid var(--border); cursor: pointer; color: var(--text2); transition: background .1s, color .1s; }
+.prm-zoom-btn:last-child { border-right: none; }
+.prm-zoom-btn:hover { background: var(--bg3); color: var(--text); }
+.prm-zoom-btn.active { background: var(--accent); color: #fff; font-weight: 600; }
+
 /* Fullscreen mode */
 .prm-fullscreen { position:fixed !important; inset:0; z-index:9990; display:flex; flex-direction:column; background:var(--bg); overflow:hidden; }
 .prm-fullscreen .prm-header { flex-shrink:0; }

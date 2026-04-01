@@ -1062,10 +1062,57 @@ function renderWorklogReport() {
 // ═══════════════════════════════════════════════════════════
 var _prmView = 'timeline';   // 'timeline' | 'list' | 'board'
 var _prmData = [];           // roadmap_items from DB
+var _prmZoom = 'quarter';    // 'quarter' | 'month' | 'week'
+var _prmNavAnchor = null;    // Date anchor for current view window (null = auto-today)
 
 window._prmSetView = function(v) {
   _prmView = v;
   document.querySelectorAll('.prm-vt-btn').forEach(function(b){ b.classList.toggle('active', b.dataset.prmView === v); });
+  _prmRender();
+};
+
+function _prmGetAnchor() {
+  if (_prmNavAnchor) return new Date(_prmNavAnchor.getTime());
+  var today = new Date(); today.setHours(0,0,0,0);
+  if (_prmZoom === 'quarter') return new Date(today.getFullYear(), 0, 1);
+  if (_prmZoom === 'month')   return new Date(today.getFullYear(), today.getMonth() < 6 ? 0 : 6, 1);
+  // week: align to 7-day blocks from Jan 1 of current year
+  var jan1 = new Date(today.getFullYear(), 0, 1);
+  var daysSinceJan1 = Math.floor((today - jan1) / 86400000);
+  var weekBlock = Math.floor(daysSinceJan1 / 7);
+  return new Date(jan1.getTime() + weekBlock * 7 * 86400000);
+}
+
+window._prmSetZoom = function(z) {
+  _prmZoom = z;
+  _prmNavAnchor = null; // reset to auto (today context)
+  document.querySelectorAll('.prm-zoom-btn').forEach(function(b){
+    b.classList.toggle('active', b.dataset.zoom === z);
+  });
+  _prmRender();
+};
+
+window._prmNavPrev = function() {
+  _prmNavAnchor = _prmGetAnchor();
+  if (_prmZoom === 'quarter') {
+    _prmNavAnchor = new Date(_prmNavAnchor.getFullYear() - 1, 0, 1);
+  } else if (_prmZoom === 'month') {
+    _prmNavAnchor = new Date(_prmNavAnchor.getFullYear(), _prmNavAnchor.getMonth() - 6, 1);
+  } else {
+    _prmNavAnchor = new Date(_prmNavAnchor.getTime() - 28 * 86400000);
+  }
+  _prmRender();
+};
+
+window._prmNavNext = function() {
+  _prmNavAnchor = _prmGetAnchor();
+  if (_prmZoom === 'quarter') {
+    _prmNavAnchor = new Date(_prmNavAnchor.getFullYear() + 1, 0, 1);
+  } else if (_prmZoom === 'month') {
+    _prmNavAnchor = new Date(_prmNavAnchor.getFullYear(), _prmNavAnchor.getMonth() + 6, 1);
+  } else {
+    _prmNavAnchor = new Date(_prmNavAnchor.getTime() + 28 * 86400000);
+  }
   _prmRender();
 };
 
@@ -1150,20 +1197,15 @@ window._prmRender = function() {
   // Apply client-side filters
   var fStatus   = ($('prmFilterStatus')   || {}).value || '';
   var fPriority = ($('prmFilterPriority') || {}).value || '';
-  var fYear     = parseInt(($('prmFilterYear') || {}).value || '') || 0;
   var items = _prmData.filter(function(r) {
     if (fStatus   && r.status   !== fStatus)   return false;
     if (fPriority && r.priority !== fPriority) return false;
-    if (fYear) {
-      // Include item if it overlaps with the selected year at all
-      var sd = r.start_date ? new Date(r.start_date).getFullYear() : null;
-      var ed = r.end_date   ? new Date(r.end_date).getFullYear()   : null;
-      var minY = Math.min(sd || fYear, ed || fYear);
-      var maxY = Math.max(sd || fYear, ed || fYear);
-      if (minY > fYear || maxY < fYear) return false;
-    }
     return true;
   });
+
+  // Update nav label to reflect current anchor year
+  var navLbl = $('prmNavLabel');
+  if (navLbl) navLbl.textContent = _prmGetAnchor().getFullYear();
 
   if (!items.length) {
     content.innerHTML = '<div class="prm-empty"><p class="text-muted">No roadmap items found.</p>' +
@@ -1172,11 +1214,10 @@ window._prmRender = function() {
   }
 
   var groupBy = ($('prmGroupBy') || {}).value || 'status';
-  var zoom    = ($('prmZoom')    || {}).value || 'month';
 
   if      (_prmView === 'list')     content.innerHTML = _prmListView(items, groupBy);
   else if (_prmView === 'board')    content.innerHTML = _prmBoardView(items);
-  else                              content.innerHTML = _prmTimelineView(items, groupBy, zoom, fYear || null);
+  else                              content.innerHTML = _prmTimelineView(items, groupBy, _prmZoom);
 };
 
 // ── Helpers ──
@@ -1288,56 +1329,76 @@ function _prmBoardView(items) {
 }
 
 // ── Timeline (Gantt) View — Swim-lane style ──
-function _prmTimelineView(items, groupBy, zoom, fixedYear) {
+function _prmTimelineView(items, groupBy, zoom) {
   var today = new Date(); today.setHours(0,0,0,0);
   var MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  var anchor = _prmGetAnchor();
 
-  // Determine year range — locked to fixedYear if provided, otherwise from items
-  var minYear, maxYear;
-  if (fixedYear) {
-    minYear = maxYear = fixedYear;
+  // ── Build columns array based on zoom mode ──
+  var columns = []; // each: { start, end, label, year, month, isWeek? }
+
+  if (zoom === 'week') {
+    // 12 weekly columns of 7 days each starting from anchor
+    for (var wi = 0; wi < 12; wi++) {
+      var wStart = new Date(anchor.getTime() + wi * 7 * 86400000);
+      var wEnd   = new Date(wStart.getTime() + 7 * 86400000);
+      var wS = MONTH_NAMES[wStart.getMonth()] + ' ' + wStart.getDate();
+      var wE = (wStart.getMonth() !== new Date(wEnd.getTime() - 1).getMonth()
+                ? MONTH_NAMES[new Date(wEnd.getTime()-1).getMonth()] + ' ' : '') +
+               new Date(wEnd.getTime() - 1).getDate();
+      columns.push({ start: wStart, end: wEnd, label: wS + '\u2013' + wE,
+                     year: wStart.getFullYear(), month: wStart.getMonth(), isWeek: true });
+    }
+  } else if (zoom === 'month') {
+    // 6 monthly columns starting from anchor
+    for (var mi = 0; mi < 6; mi++) {
+      var mStart = new Date(anchor.getFullYear(), anchor.getMonth() + mi, 1);
+      var mEnd   = new Date(anchor.getFullYear(), anchor.getMonth() + mi + 1, 1);
+      columns.push({ start: mStart, end: mEnd, label: MONTH_NAMES[mStart.getMonth()],
+                     year: mStart.getFullYear(), month: mStart.getMonth() });
+    }
   } else {
-    minYear = maxYear = today.getFullYear();
-    items.forEach(function(r) {
-      if (r.start_date) { var y = new Date(r.start_date).getFullYear(); if (y < minYear) minYear = y; if (y > maxYear) maxYear = y; }
-      if (r.end_date)   { var y = new Date(r.end_date).getFullYear();   if (y < minYear) minYear = y; if (y > maxYear) maxYear = y; }
-    });
+    // Quarter view: 12 monthly columns for the full anchor year
+    var yr = anchor.getFullYear();
+    for (var qi = 0; qi < 12; qi++) {
+      var qmStart = new Date(yr, qi, 1);
+      var qmEnd   = new Date(yr, qi + 1, 1);
+      columns.push({ start: qmStart, end: qmEnd, label: MONTH_NAMES[qi],
+                     year: yr, month: qi });
+    }
   }
 
-  // Build monthly columns
-  var months = [];
-  var cur = new Date(minYear, 0, 1);
-  var maxEnd = new Date(maxYear, 11, 31, 23, 59, 59, 999);
-  while (cur <= maxEnd) {
-    var mStart = new Date(cur.getFullYear(), cur.getMonth(), 1);
-    var mEnd   = new Date(cur.getFullYear(), cur.getMonth() + 1, 1);
-    months.push({
-      year: cur.getFullYear(),
-      q:    Math.floor(cur.getMonth() / 3) + 1,
-      month: cur.getMonth(),
-      label: MONTH_NAMES[cur.getMonth()],
-      start: mStart,
-      end:   mEnd
+  if (!columns.length) return '<p class="text-muted placeholder-text">No timeline data.</p>';
+
+  // ── Build header groupings from columns ──
+  // Row 1: Year spans
+  var yearSpans = [], yearSpanMap = {};
+  columns.forEach(function(c) {
+    var yk = c.year;
+    if (!yearSpanMap[yk]) { yearSpanMap[yk] = 0; yearSpans.push(yk); }
+    yearSpanMap[yk]++;
+  });
+
+  // Row 2 (middle): Quarter spans (for quarter/month) OR Month spans (for week)
+  var midSpans = [], midSpanMap = {};
+  if (zoom === 'week') {
+    // Group columns by month name
+    columns.forEach(function(c) {
+      var mk = c.year + '-' + c.month;
+      if (!midSpanMap[mk]) { midSpanMap[mk] = { label: MONTH_NAMES[c.month], count: 0 }; midSpans.push(mk); }
+      midSpanMap[mk].count++;
     });
-    cur = new Date(cur.getFullYear(), cur.getMonth() + 1, 1);
+  } else {
+    // Group columns by quarter
+    columns.forEach(function(c) {
+      var q = Math.floor(c.month / 3) + 1;
+      var qk = c.year + '-Q' + q;
+      if (!midSpanMap[qk]) { midSpanMap[qk] = { label: 'Q' + q, count: 0, active: false }; midSpans.push(qk); }
+      midSpanMap[qk].count++;
+      var todayQ = today.getFullYear() + '-Q' + (Math.floor(today.getMonth() / 3) + 1);
+      if (qk === todayQ) midSpanMap[qk].active = true;
+    });
   }
-  if (!months.length) return '<p class="text-muted placeholder-text">No timeline data.</p>';
-
-  // Year → month count (for colspan on year header)
-  var yearMonths = {}, yearOrder = [];
-  months.forEach(function(m) {
-    if (!yearMonths[m.year]) { yearMonths[m.year] = 0; yearOrder.push(m.year); }
-    yearMonths[m.year]++;
-  });
-
-  // Quarter key → month count (for colspan on quarter header)
-  var qtrMonths = {}, qtrOrder = [];
-  months.forEach(function(m) {
-    var qk = m.year + '-Q' + m.q;
-    if (!qtrMonths[qk]) { qtrMonths[qk] = 0; qtrOrder.push(qk); }
-    qtrMonths[qk]++;
-  });
-  var todayQKey = today.getFullYear() + '-Q' + (Math.floor(today.getMonth() / 3) + 1);
 
   // Load persisted group/category colors from localStorage
   var _gcColors = JSON.parse(localStorage.getItem('prm_gc_colors') || '{}');
@@ -1366,27 +1427,29 @@ function _prmTimelineView(items, groupBy, zoom, fixedYear) {
   var html = '<div class="prm-swimlane-wrap"><div class="prm-sl-scroll">';
   html += '<table class="prm-sl-table" cellspacing="0" cellpadding="0"><thead>';
 
-  // Row 1: Year headers — corner spans rows 1 & 2 (year + quarter)
+  // Row 1: Year headers — corner spans rows 1 & 2
   html += '<tr class="prm-sl-yr-row"><th class="prm-sl-corner-top" colspan="2" rowspan="2"></th>';
-  yearOrder.forEach(function(y) {
-    html += '<th class="prm-sl-year-th" colspan="' + yearMonths[y] + '">' + y + '</th>';
+  yearSpans.forEach(function(y) {
+    html += '<th class="prm-sl-year-th" colspan="' + yearSpanMap[y] + '">' + y + '</th>';
   });
   html += '</tr>';
 
-  // Row 2: Quarter headers (no group/cat — covered by rowspan above)
+  // Row 2: Quarter headers (for quarter/month) or Month headers (for week)
   html += '<tr class="prm-sl-qtr-row">';
-  qtrOrder.forEach(function(qk) {
-    var qLabel = qk.split('-')[1]; // 'Q1','Q2'...
-    var isCurQ = qk === todayQKey;
-    html += '<th class="prm-sl-hdr-q' + (isCurQ ? ' prm-sl-q-active' : '') + '" colspan="' + qtrMonths[qk] + '">' + qLabel + '</th>';
+  midSpans.forEach(function(mk) {
+    var ms = midSpanMap[mk];
+    var activeClass = ms.active ? ' prm-sl-q-active' : '';
+    html += '<th class="prm-sl-hdr-q' + activeClass + '" colspan="' + ms.count + '">' + ms.label + '</th>';
   });
   html += '</tr>';
 
-  // Row 3: Month headers (Group + Category + month cells)
+  // Row 3: Column label headers (months or week ranges)
   html += '<tr class="prm-sl-mo-row"><th class="prm-sl-hdr-group">Group</th><th class="prm-sl-hdr-cat">Category</th>';
-  months.forEach(function(m) {
-    var isCurMo = today.getFullYear() === m.year && today.getMonth() === m.month;
-    html += '<th class="prm-sl-hdr-mo' + (isCurMo ? ' prm-sl-mo-active' : '') + '">' + m.label + '</th>';
+  columns.forEach(function(c) {
+    var isCur = !c.isWeek
+      ? (today.getFullYear() === c.year && today.getMonth() === c.month)
+      : (today >= c.start && today < c.end);
+    html += '<th class="prm-sl-hdr-mo' + (isCur ? ' prm-sl-mo-active' : '') + '">' + c.label + '</th>';
   });
   html += '</tr></thead><tbody>';
 
@@ -1432,25 +1495,28 @@ function _prmTimelineView(items, groupBy, zoom, fixedYear) {
       '</td>';
 
       // Single spanning timeline cell — bars sized by total timeline width
-      var totalStart = months[0].start;
-      var totalEnd   = months[months.length - 1].end;
+      var totalStart = columns[0].start;
+      var totalEnd   = columns[columns.length - 1].end;
       var totalMs    = totalEnd - totalStart;
 
-      html += '<td class="prm-sl-tl-all" colspan="' + months.length + '" style="height:' + laneH + 'px">';
+      html += '<td class="prm-sl-tl-all" colspan="' + columns.length + '" style="height:' + laneH + 'px">';
 
-      // Current month highlight
-      months.forEach(function(m) {
-        if (today.getFullYear() === m.year && today.getMonth() === m.month) {
-          var ml = ((m.start - totalStart) / totalMs) * 100;
-          var mw = ((m.end - m.start) / totalMs) * 100;
+      // Current period highlight
+      columns.forEach(function(c) {
+        var isCurCol = c.isWeek
+          ? (today >= c.start && today < c.end)
+          : (today.getFullYear() === c.year && today.getMonth() === c.month);
+        if (isCurCol) {
+          var ml = ((c.start - totalStart) / totalMs) * 100;
+          var mw = ((c.end - c.start) / totalMs) * 100;
           html += '<div class="prm-sl-cur-mo-bg" style="left:' + ml.toFixed(3) + '%;width:' + mw.toFixed(3) + '%"></div>';
         }
       });
 
-      // Month divider lines
-      months.forEach(function(m, mi) {
-        if (mi === 0) return;
-        var dp = ((m.start - totalStart) / totalMs) * 100;
+      // Column divider lines
+      columns.forEach(function(c, ci) {
+        if (ci === 0) return;
+        var dp = ((c.start - totalStart) / totalMs) * 100;
         html += '<div class="prm-sl-mo-div" style="left:' + dp.toFixed(3) + '%"></div>';
       });
 

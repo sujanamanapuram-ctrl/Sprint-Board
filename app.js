@@ -711,8 +711,9 @@ async function refreshAfterIssueChange() {
 // SIDEBAR
 // ═══════════════════════════════════════════════════════════
 function renderSidebar() {
-  var isAdmin = canCreateSpace();
-  var isOwner = (S.currentUserObj || {}).role === 'owner';
+  var role = (S.currentUserObj || {}).role;
+  var isOwner = role === 'owner';
+  var isOwnerOrAdmin = role === 'owner' || role === 'admin';
 
   // Show/hide the + new space button (owner only)
   var newSpaceBtn = $('newSpaceBtn');
@@ -722,9 +723,9 @@ function renderSidebar() {
   var ownerOnlyItems = document.querySelectorAll('[data-tab="reports"], [data-tab="space-settings"], [data-view="global-reports"]');
   ownerOnlyItems.forEach(function(el) { el.style.display = isOwner ? '' : 'none'; });
 
-  // Work Log and Product Roadmap are hidden for members
+  // Work Log and Product Roadmap visible to owner and admin only (hidden for members)
   var memberHiddenItems = document.querySelectorAll('[data-view="worklog-report"], [data-view="product-roadmap"]');
-  memberHiddenItems.forEach(function(el) { el.style.display = isAdmin ? '' : 'none'; });
+  memberHiddenItems.forEach(function(el) { el.style.display = isOwnerOrAdmin ? '' : 'none'; });
 
   // Favorites
   var favRecs = (S.data.space_favorites || []).filter(function (f) { return f.user_id == S.currentUser; });
@@ -735,7 +736,7 @@ function renderSidebar() {
 
   // All spaces — members only see spaces they are assigned to in DB
   var allSpaces = (S.data.spaces || []).filter(function (s) { return !s.is_archived; });
-  var spaces = isAdmin ? allSpaces : allSpaces.filter(function(s) {
+  var spaces = isOwnerOrAdmin ? allSpaces : allSpaces.filter(function(s) {
     return (S.data.space_members || []).some(function(m) {
       return m.space_id === s.id && m.user_id === S.currentUser;
     });

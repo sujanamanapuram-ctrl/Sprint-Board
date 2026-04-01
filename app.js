@@ -722,6 +722,10 @@ function renderSidebar() {
   var ownerOnlyItems = document.querySelectorAll('[data-tab="reports"], [data-tab="space-settings"], [data-view="global-reports"]');
   ownerOnlyItems.forEach(function(el) { el.style.display = isOwner ? '' : 'none'; });
 
+  // Work Log and Product Roadmap are hidden for members
+  var memberHiddenItems = document.querySelectorAll('[data-view="worklog-report"], [data-view="product-roadmap"]');
+  memberHiddenItems.forEach(function(el) { el.style.display = isAdmin ? '' : 'none'; });
+
   // Favorites
   var favRecs = (S.data.space_favorites || []).filter(function (f) { return f.user_id == S.currentUser; });
   var favs = favRecs.map(function (f) { return getSpace(f.space_id); }).filter(Boolean);
@@ -3956,13 +3960,14 @@ function showSpaceContextMenu(anchorBtn, spaceId) {
   var starred = isFavorited(spaceId);
   var starLabel = starred ? '\u2B50 Remove from starred' : '\u2B50 Add to starred';
 
+  var isAdminUser = canCreateSpace();
   var menu = document.createElement('div');
   menu.className = 'space-context-menu';
   menu.innerHTML =
     '<div class="space-context-menu-item" data-action="star">' + starLabel + '</div>' +
-    '<div class="space-context-menu-item" data-action="people">\uD83D\uDC65 Manage people</div>' +
-    '<div class="space-context-menu-item" data-action="settings">\u2699\uFE0F Space settings</div>' +
-    '<div class="space-context-menu-item danger" data-action="delete">\uD83D\uDDD1\uFE0F Delete space</div>';
+    (isAdminUser ? '<div class="space-context-menu-item" data-action="people">\uD83D\uDC65 Manage people</div>' : '') +
+    (isAdminUser ? '<div class="space-context-menu-item" data-action="settings">\u2699\uFE0F Space settings</div>' : '') +
+    (isAdminUser ? '<div class="space-context-menu-item danger" data-action="delete">\uD83D\uDDD1\uFE0F Delete space</div>' : '');
 
   // Position relative to the button
   var rect = anchorBtn.getBoundingClientRect();

@@ -1028,6 +1028,10 @@ document.addEventListener('click', function(e) {
   if (!e.target.closest('#awAddFilterBtn') && !e.target.closest('#awAddDrop')) {
     var addDrop = $('awAddDrop'); if (addDrop) addDrop.style.display = 'none';
   }
+  // Close column picker
+  if (!e.target.closest('#awColBtn') && !e.target.closest('#awColDrop')) {
+    var colDrop = $('awColDrop'); if (colDrop) colDrop.style.display = 'none';
+  }
   if (!e.target.closest('.aw-ms-wrap') && !e.target.closest('#wlrSpacePanel') && !e.target.closest('#wlrUserPanel')) {
     ['wlrSpacePanel','wlrUserPanel'].forEach(function(id){ var p=$(id); if(p) p.hidden=true; });
   }
@@ -3652,6 +3656,69 @@ window._awClearFilters = function() {
   renderAllWork();
 };
 
+// ── Dynamic Columns ──────────────────────────────────────────────────
+var AW_ALL_COLUMNS = [
+  { key: 'key',             label: 'Key',            sortCol: 'key',          def: true },
+  { key: 'title',           label: 'Title',          sortCol: 'title',        def: true },
+  { key: 'type',            label: 'Type',           sortCol: 'type',         def: true },
+  { key: 'status',          label: 'Status',         sortCol: 'status',       def: true },
+  { key: 'priority',        label: 'Priority',       sortCol: 'priority',     def: true },
+  { key: 'assignee',        label: 'Assignee',       sortCol: 'assignee',     def: true },
+  { key: 'sprint',          label: 'Sprint',         sortCol: 'sprint_id',    def: true },
+  { key: 'story_points',    label: 'Points',         sortCol: 'story_points', def: true },
+  { key: 'due_date',        label: 'Due Date',       sortCol: 'due_date',     def: true },
+  { key: 'updated_at',      label: 'Updated',        sortCol: 'updated_at',   def: true },
+  { key: 'start_date',      label: 'Start Date',     sortCol: 'start_date',   def: false },
+  { key: 'created_at',      label: 'Created',        sortCol: 'created_at',   def: false },
+  { key: 'reporter',        label: 'Reporter',       sortCol: null,           def: false },
+  { key: 'labels',          label: 'Labels',         sortCol: 'labels',       def: false },
+  { key: 'fix_description', label: 'Fix Description',sortCol: null,           def: false },
+];
+var _AW_COL_STORE_KEY = 'sb_aw_cols';
+
+function _awGetVisibleCols() {
+  try {
+    var saved = JSON.parse(localStorage.getItem(_AW_COL_STORE_KEY));
+    if (Array.isArray(saved) && saved.length) {
+      return AW_ALL_COLUMNS.filter(function(c){ return saved.indexOf(c.key) >= 0; });
+    }
+  } catch(_) {}
+  return AW_ALL_COLUMNS.filter(function(c){ return c.def; });
+}
+
+function _awSaveVisibleCols(keys) {
+  localStorage.setItem(_AW_COL_STORE_KEY, JSON.stringify(keys));
+}
+
+window._awToggleColPicker = function() {
+  var drop = $('awColDrop');
+  if (!drop) return;
+  var open = drop.style.display === 'none';
+  drop.style.display = open ? 'block' : 'none';
+  if (open) _awRenderColList();
+};
+
+function _awRenderColList() {
+  var list = $('awColList');
+  if (!list) return;
+  var visible = _awGetVisibleCols().map(function(c){ return c.key; });
+  list.innerHTML = AW_ALL_COLUMNS.map(function(col) {
+    var chk = visible.indexOf(col.key) >= 0 ? ' checked' : '';
+    return '<label class="aw-col-item"><input type="checkbox" value="' + col.key + '"' + chk +
+      ' onchange="window._awToggleColKey(\'' + col.key + '\',this.checked)"> ' + esc(col.label) + '</label>';
+  }).join('');
+}
+
+window._awToggleColKey = function(key, on) {
+  var visible = _awGetVisibleCols().map(function(c){ return c.key; });
+  if (on) { if (visible.indexOf(key) < 0) visible.push(key); }
+  else { visible = visible.filter(function(k){ return k !== key; }); }
+  // Keep order matching AW_ALL_COLUMNS
+  visible = AW_ALL_COLUMNS.map(function(c){ return c.key; }).filter(function(k){ return visible.indexOf(k) >= 0; });
+  _awSaveVisibleCols(visible);
+  renderAllWork();
+};
+
 function renderAllWork() {
   var search = ($('allWorkSearch') ? $('allWorkSearch').value : '').toLowerCase().trim();
   var f = S.awFilters;
@@ -3743,32 +3810,50 @@ function renderAllWork() {
       '</div>';
   }
 
+  var visCols = _awGetVisibleCols();
+
   html += '<table class="data-table"><thead><tr>' +
     '<th><input type="checkbox" id="allWorkSelectAll"' + (S.allWorkSelected.size === issues.length && issues.length > 0 ? ' checked' : '') + '></th>' +
-    th('Key', 'key') + th('Title', 'title') + th('Type', 'type') + th('Status', 'status') +
-    th('Priority', 'priority') + th('Assignee', 'assignee') + th('Sprint', 'sprint_id') +
-    th('Points', 'story_points') + th('Due Date', 'due_date') + th('Updated', 'updated_at') +
+    visCols.map(function(col) {
+      return col.sortCol
+        ? th(col.label, col.sortCol)
+        : '<th>' + esc(col.label) + '</th>';
+    }).join('') +
     '</tr></thead><tbody>';
 
   for (var i = 0; i < issues.length; i++) {
     var iss = issues[i];
     var assignee = findUser(iss.assignee_id);
     var sprint = (S.data.sprints || []).find(function (sp) { return sp.id == iss.sprint_id; });
+    var reporter = findUser(iss.reporter_id);
     var checked = S.allWorkSelected.has(iss.id) ? ' checked' : '';
     var iid = iss.id;
     var nav = 'openIssuePage(\'' + iid + '\')';
     html += '<tr class="clickable-row">' +
       '<td onclick="event.stopPropagation()"><input type="checkbox" data-issue-check="' + iid + '"' + checked + '></td>' +
-      '<td class="issue-key" onclick="' + nav + '">' + esc(issueKeyStr(iss)) + '</td>' +
-      '<td onclick="' + nav + '">' + esc(iss.title) + '</td>' +
-      '<td onclick="' + nav + '">' + typeIcon(iss.type) + ' ' + cap(iss.type) + '</td>' +
-      '<td onclick="' + nav + '">' + statusBadge(iss.status) + '</td>' +
-      '<td onclick="' + nav + '">' + priorityBadge(iss.priority) + '</td>' +
-      '<td onclick="' + nav + '">' + (assignee ? avatarHtml(assignee, 24) + ' ' + esc(assignee.name) : '<span class="text-muted">Unassigned</span>') + '</td>' +
-      '<td onclick="' + nav + '">' + (sprint ? esc(sprint.name) : '\u2014') + '</td>' +
-      '<td onclick="' + nav + '">' + (iss.story_points != null ? iss.story_points : '\u2014') + '</td>' +
-      '<td onclick="' + nav + '">' + (fmtDateShort(iss.due_date) || '\u2014') + '</td>' +
-      '<td class="text-muted" onclick="' + nav + '">' + relativeTime(iss.updated_at) + '</td></tr>';
+      visCols.map(function(col) {
+        var cell = '';
+        switch(col.key) {
+          case 'key':             cell = '<td class="issue-key" onclick="' + nav + '">' + esc(issueKeyStr(iss)) + '</td>'; break;
+          case 'title':           cell = '<td onclick="' + nav + '">' + esc(iss.title) + '</td>'; break;
+          case 'type':            cell = '<td onclick="' + nav + '">' + typeIcon(iss.type) + ' ' + cap(iss.type) + '</td>'; break;
+          case 'status':          cell = '<td onclick="' + nav + '">' + statusBadge(iss.status) + '</td>'; break;
+          case 'priority':        cell = '<td onclick="' + nav + '">' + priorityBadge(iss.priority) + '</td>'; break;
+          case 'assignee':        cell = '<td onclick="' + nav + '">' + (assignee ? avatarHtml(assignee,24)+' '+esc(assignee.name) : '<span class="text-muted">Unassigned</span>') + '</td>'; break;
+          case 'sprint':          cell = '<td onclick="' + nav + '">' + (sprint ? esc(sprint.name) : '\u2014') + '</td>'; break;
+          case 'story_points':    cell = '<td onclick="' + nav + '">' + (iss.story_points != null ? iss.story_points : '\u2014') + '</td>'; break;
+          case 'due_date':        cell = '<td onclick="' + nav + '">' + (fmtDateShort(iss.due_date) || '\u2014') + '</td>'; break;
+          case 'updated_at':      cell = '<td class="text-muted" onclick="' + nav + '">' + relativeTime(iss.updated_at) + '</td>'; break;
+          case 'start_date':      cell = '<td onclick="' + nav + '">' + (fmtDateShort(iss.start_date) || '\u2014') + '</td>'; break;
+          case 'created_at':      cell = '<td onclick="' + nav + '">' + (fmtDateShort(iss.created_at) || '\u2014') + '</td>'; break;
+          case 'reporter':        cell = '<td onclick="' + nav + '">' + (reporter ? esc(reporter.name) : '\u2014') + '</td>'; break;
+          case 'labels':          cell = '<td onclick="' + nav + '">' + (iss.labels ? esc(iss.labels) : '\u2014') + '</td>'; break;
+          case 'fix_description': cell = '<td onclick="' + nav + '">' + (iss.fix_description ? esc(iss.fix_description.slice(0,60)) + (iss.fix_description.length>60?'…':'') : '\u2014') + '</td>'; break;
+          default:                cell = '<td onclick="' + nav + '">\u2014</td>';
+        }
+        return cell;
+      }).join('') +
+      '</tr>';
   }
   html += '</tbody></table>';
   $('allWorkTable').innerHTML = html;

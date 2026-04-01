@@ -2832,6 +2832,31 @@ body.light .user-footer-actions .btn-icon:hover { color: #fff; background: rgba(
 .aw-add-drop-item:hover { background: var(--bg3); }
 .aw-add-drop-empty { padding: 12px; font-size: 13px; color: var(--text3); text-align: center; }
 
+/* Column picker */
+.aw-col-btn {
+  display: inline-flex; align-items: center; gap: 5px; padding: 5px 12px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg2); color: var(--text2); cursor: pointer; font-size: 13px; font-weight: 500;
+  transition: border-color .15s, background .15s;
+}
+.aw-col-btn:hover { border-color: var(--accent); background: var(--bg3); color: var(--text); }
+.aw-col-arrow { font-size: 10px; color: var(--text3); }
+.aw-col-drop {
+  position: absolute; top: calc(100% + 4px); right: 0; width: 210px;
+  background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: 0 4px 20px rgba(0,0,0,.18); z-index: 9100;
+}
+.aw-col-drop-head {
+  padding: 9px 12px 6px; font-size: 11px; font-weight: 700; color: var(--text3);
+  text-transform: uppercase; letter-spacing: .05em; border-bottom: 1px solid var(--border);
+}
+.aw-col-item {
+  display: flex; align-items: center; gap: 8px; padding: 7px 12px;
+  cursor: pointer; font-size: 13px; color: var(--text); user-select: none;
+}
+.aw-col-item:hover { background: var(--bg3); }
+.aw-col-item input[type="checkbox"] { cursor: pointer; accent-color: var(--accent); width: 14px; height: 14px; flex-shrink: 0; }
+
 /* ── Bulk Action Bar ─────────────────────────────────────── */
 .bulk-bar {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;

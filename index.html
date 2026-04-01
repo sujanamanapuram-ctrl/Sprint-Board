@@ -447,6 +447,13 @@
             <button class="aw-filter-toggle-btn" id="awFilterBtn" onclick="window._awToggleFilterPanel()">
               <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="margin-right:5px"><path d="M1 3h14v1.5L9 10v5l-2-1V10L1 4.5V3z"/></svg>Filter
             </button>
+            <div style="position:relative">
+              <button class="aw-col-btn" id="awColBtn" onclick="window._awToggleColPicker()">&#9776; Columns <span class="aw-col-arrow">▾</span></button>
+              <div class="aw-col-drop" id="awColDrop" style="display:none">
+                <div class="aw-col-drop-head">Toggle Columns</div>
+                <div id="awColList"></div>
+              </div>
+            </div>
             <button class="btn btn-outline btn-sm" id="awClearFilters" style="display:none" onclick="window._awClearFilters()">✕ Clear all</button>
           </div>
           <!-- Advanced Filter Panel -->

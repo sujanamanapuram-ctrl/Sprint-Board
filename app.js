@@ -1098,7 +1098,8 @@ window._prmNavPrev = function() {
   } else if (_prmZoom === 'month') {
     _prmNavAnchor = new Date(_prmNavAnchor.getFullYear(), _prmNavAnchor.getMonth() - 6, 1);
   } else {
-    _prmNavAnchor = new Date(_prmNavAnchor.getTime() - 28 * 86400000);
+    // Week view: move back 1 month
+    _prmNavAnchor = new Date(_prmNavAnchor.getFullYear(), _prmNavAnchor.getMonth() - 1, 1);
   }
   _prmRender();
 };
@@ -1110,7 +1111,8 @@ window._prmNavNext = function() {
   } else if (_prmZoom === 'month') {
     _prmNavAnchor = new Date(_prmNavAnchor.getFullYear(), _prmNavAnchor.getMonth() + 6, 1);
   } else {
-    _prmNavAnchor = new Date(_prmNavAnchor.getTime() + 28 * 86400000);
+    // Week view: move forward 1 month
+    _prmNavAnchor = new Date(_prmNavAnchor.getFullYear(), _prmNavAnchor.getMonth() + 1, 1);
   }
   _prmRender();
 };
@@ -1202,9 +1204,15 @@ window._prmRender = function() {
     return true;
   });
 
-  // Update nav label to reflect current anchor year
+  // Update nav label to reflect current anchor (month+year for week view, year otherwise)
   var navLbl = $('prmNavLabel');
-  if (navLbl) navLbl.textContent = _prmGetAnchor().getFullYear();
+  if (navLbl) {
+    var _anc = _prmGetAnchor();
+    var _MN = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    navLbl.textContent = _prmZoom === 'week'
+      ? _MN[_anc.getMonth()] + ' ' + _anc.getFullYear()
+      : _anc.getFullYear();
+  }
 
   if (!items.length) {
     content.innerHTML = '<div class="prm-empty"><p class="text-muted">No roadmap items found.</p>' +

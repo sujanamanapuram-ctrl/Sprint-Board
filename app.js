@@ -3677,10 +3677,12 @@ var AW_ALL_COLUMNS = [
 var _AW_COL_STORE_KEY = 'sb_aw_cols';
 
 function _awGetVisibleCols() {
+  var cfCols = _awGetCFColumns();
+  var allCols = AW_ALL_COLUMNS.concat(cfCols);
   try {
     var saved = JSON.parse(localStorage.getItem(_AW_COL_STORE_KEY));
     if (Array.isArray(saved) && saved.length) {
-      return AW_ALL_COLUMNS.filter(function(c){ return saved.indexOf(c.key) >= 0; });
+      return saved.map(function(k){ return allCols.find(function(c){ return c.key === k; }); }).filter(Boolean);
     }
   } catch(_) {}
   return AW_ALL_COLUMNS.filter(function(c){ return c.def; });
@@ -3688,6 +3690,14 @@ function _awGetVisibleCols() {
 
 function _awSaveVisibleCols(keys) {
   localStorage.setItem(_AW_COL_STORE_KEY, JSON.stringify(keys));
+}
+
+// Get custom field columns for current space
+function _awGetCFColumns() {
+  var spaceFields = (S.data.custom_fields || []).filter(function(f){ return f.space_id == S.currentSpace; });
+  return spaceFields.map(function(f){
+    return { key: 'cf_' + f.id, label: f.name, sortCol: null, def: false, cfId: f.id };
+  });
 }
 
 window._awToggleColPicker = function() {
@@ -3702,7 +3712,9 @@ function _awRenderColList() {
   var list = $('awColList');
   if (!list) return;
   var visible = _awGetVisibleCols().map(function(c){ return c.key; });
-  list.innerHTML = AW_ALL_COLUMNS.map(function(col) {
+  var cfCols = _awGetCFColumns();
+  var allCols = AW_ALL_COLUMNS.concat(cfCols);
+  list.innerHTML = allCols.map(function(col) {
     var chk = visible.indexOf(col.key) >= 0 ? ' checked' : '';
     return '<label class="aw-col-item"><input type="checkbox" value="' + col.key + '"' + chk +
       ' onchange="window._awToggleColKey(\'' + col.key + '\',this.checked)"> ' + esc(col.label) + '</label>';
@@ -3713,9 +3725,12 @@ window._awToggleColKey = function(key, on) {
   var visible = _awGetVisibleCols().map(function(c){ return c.key; });
   if (on) { if (visible.indexOf(key) < 0) visible.push(key); }
   else { visible = visible.filter(function(k){ return k !== key; }); }
-  // Keep order matching AW_ALL_COLUMNS
-  visible = AW_ALL_COLUMNS.map(function(c){ return c.key; }).filter(function(k){ return visible.indexOf(k) >= 0; });
-  _awSaveVisibleCols(visible);
+  // Keep order: standard columns first (by AW_ALL_COLUMNS order), then CF columns
+  var cfCols = _awGetCFColumns();
+  var ordered = AW_ALL_COLUMNS.map(function(c){ return c.key; })
+    .concat(cfCols.map(function(c){ return c.key; }))
+    .filter(function(k){ return visible.indexOf(k) >= 0; });
+  _awSaveVisibleCols(ordered);
   renderAllWork();
 };
 
@@ -3729,6 +3744,9 @@ function renderAllWork() {
     f.dueDateFrom || f.dueDateTo || f.startDateFrom || f.startDateTo;
   var clearBtn = $('awClearFilters');
   if (clearBtn) clearBtn.style.display = anyFilter ? '' : 'none';
+  // Columns button visible to owner only
+  var colBtn = $('awColBtn');
+  if (colBtn) colBtn.parentElement.style.display = canCreateSpace() ? '' : 'none';
 
   var issues = getSpaceIssues(S.currentSpace);
 
@@ -3849,7 +3867,15 @@ function renderAllWork() {
           case 'reporter':        cell = '<td onclick="' + nav + '">' + (reporter ? esc(reporter.name) : '\u2014') + '</td>'; break;
           case 'labels':          cell = '<td onclick="' + nav + '">' + (iss.labels ? esc(iss.labels) : '\u2014') + '</td>'; break;
           case 'fix_description': cell = '<td onclick="' + nav + '">' + (iss.fix_description ? esc(iss.fix_description.slice(0,60)) + (iss.fix_description.length>60?'…':'') : '\u2014') + '</td>'; break;
-          default:                cell = '<td onclick="' + nav + '">\u2014</td>';
+          default:
+            // Custom field column (cf_<fieldId>)
+            if (col.key.indexOf('cf_') === 0) {
+              var cfId = col.cfId || col.key.replace('cf_','');
+              var cfVal = (S.data.issue_field_values || []).find(function(v){ return v.issue_id == iss.id && v.field_id == cfId; });
+              cell = '<td onclick="' + nav + '">' + (cfVal && cfVal.value ? esc(cfVal.value) : '\u2014') + '</td>';
+            } else {
+              cell = '<td onclick="' + nav + '">\u2014</td>';
+            }
         }
         return cell;
       }).join('') +

@@ -5161,17 +5161,23 @@ function renderDrawerCustomFields(cfValues, issueId, spaceId) {
       var mopts = (Array.isArray(field.options) ? field.options : (field.options || []));
       var selected = val ? val.split(',').map(function(s){return s.trim();}).filter(Boolean) : [];
       var isMultiSel = ftype === 'multi_select';
-      var tagsHtml = selected.length
-        ? selected.map(function(s){ return '<span class="cf-sel-tag">' + esc(s) + '<span class="cf-sel-tag-x" data-val="' + esc(s) + '">×</span></span>'; }).join('')
-        : '<span class="cf-sel-placeholder">Select ' + (isMultiSel ? 'options' : 'an option') + '…</span>';
-      inputHtml = '<div class="cf-select-wrap" data-cf-id="' + fid + '" data-multi="' + (isMultiSel ? '1' : '0') + '" data-opts="' + esc(mopts.join(',')) + '">' +
-        '<div class="cf-select-trigger">' + tagsHtml + '<span class="cf-sel-arrow">▾</span></div>' +
+      var displayVal = selected.length ? esc(selected.join(', ')) : '';
+      inputHtml = '<div class="cf-select-wrap" data-cf-id="' + fid + '" data-multi="' + (isMultiSel ? '1' : '0') + '">' +
+        '<div class="cf-select-trigger">' +
+          '<input class="cf-sel-search" type="text" value="' + displayVal + '" placeholder="' + (isMultiSel ? 'Select options…' : 'Select an option…') + '" readonly>' +
+          (selected.length ? '<span class="cf-sel-clear" title="Clear">×</span>' : '') +
+          '<span class="cf-sel-arrow">⌄</span>' +
+        '</div>' +
         '<div class="cf-select-dropdown" style="display:none">' +
-        mopts.map(function(o) {
-          var sel = selected.indexOf(o) >= 0;
-          return '<div class="cf-sel-opt' + (sel ? ' selected' : '') + '" data-val="' + esc(o) + '">' +
-            '<span class="cf-sel-check">' + (sel ? '✓' : '') + '</span>' + esc(o) + '</div>';
-        }).join('') + '</div></div>';
+          '<div class="cf-sel-search-wrap"><input class="cf-sel-filter" type="text" placeholder="Search…"></div>' +
+          '<div class="cf-sel-list">' +
+          mopts.map(function(o) {
+            var sel = selected.indexOf(o) >= 0;
+            return '<div class="cf-sel-opt' + (sel ? ' cf-sel-opt-active' : '') + '" data-val="' + esc(o) + '">' + esc(o) + '</div>';
+          }).join('') +
+          '</div>' +
+        '</div>' +
+      '</div>';
     } else if (ftype === 'user') {
       var uopts = (S.data.users || [])
         .map(function(u) { return '<option value="' + u.id + '"' + (u.id == val ? ' selected' : '') + '>' + esc(u.name) + '</option>'; }).join('');
@@ -5200,52 +5206,55 @@ function renderDrawerCustomFields(cfValues, issueId, spaceId) {
       }, 400);
     }
 
-    function rebuildTrigger(wrap, selArr) {
-      var trigger = wrap.querySelector('.cf-select-trigger');
-      var arrowHtml = '<span class="cf-sel-arrow">▾</span>';
-      var isMulti = wrap.dataset.multi === '1';
-      trigger.innerHTML = selArr.length
-        ? selArr.map(function(s){ return '<span class="cf-sel-tag">' + esc(s) + '<span class="cf-sel-tag-x" data-val="' + esc(s) + '">×</span></span>'; }).join('') + arrowHtml
-        : '<span class="cf-sel-placeholder">Select ' + (isMulti ? 'options' : 'an option') + '…</span>' + arrowHtml;
-      // Re-bind tag remove buttons
-      trigger.querySelectorAll('.cf-sel-tag-x').forEach(function(x) {
-        x.addEventListener('click', function(ev) {
-          ev.stopPropagation();
-          var v = x.dataset.val;
-          selArr = selArr.filter(function(s){ return s !== v; });
-          rebuildTrigger(wrap, selArr);
-          updateDropdownChecks(wrap, selArr);
-          saveValue(selArr.join(','));
-        });
-      });
-    }
-
-    function updateDropdownChecks(wrap, selArr) {
-      wrap.querySelectorAll('.cf-sel-opt').forEach(function(opt) {
-        var v = opt.dataset.val;
-        var sel = selArr.indexOf(v) >= 0;
-        opt.classList.toggle('selected', sel);
-        opt.querySelector('.cf-sel-check').textContent = sel ? '✓' : '';
-      });
-    }
-
     if (isSelectWrap) {
       var isMulti = el.dataset.multi === '1';
-      var selArr = Array.from(el.querySelectorAll('.cf-sel-opt.selected')).map(function(o){ return o.dataset.val; });
-
-      // Re-bind existing tag remove buttons
-      rebuildTrigger(el, selArr);
-
-      // Toggle dropdown on trigger click
-      var trigger = el.querySelector('.cf-select-trigger');
+      var selArr = Array.from(el.querySelectorAll('.cf-sel-opt-active')).map(function(o){ return o.dataset.val; });
+      var trigger  = el.querySelector('.cf-select-trigger');
       var dropdown = el.querySelector('.cf-select-dropdown');
+      var searchInput = el.querySelector('.cf-sel-search');
+      var filterInput = el.querySelector('.cf-sel-filter');
 
+      function refreshTrigger() {
+        searchInput.value = selArr.length ? selArr.join(', ') : '';
+        searchInput.placeholder = isMulti ? 'Select options…' : 'Select an option…';
+        var clearBtn = trigger.querySelector('.cf-sel-clear');
+        if (selArr.length && !clearBtn) {
+          var c = document.createElement('span');
+          c.className = 'cf-sel-clear'; c.title = 'Clear'; c.textContent = '×';
+          trigger.insertBefore(c, trigger.querySelector('.cf-sel-arrow'));
+          c.addEventListener('click', function(ev) {
+            ev.stopPropagation();
+            selArr = []; refreshTrigger(); refreshOpts(''); saveValue('');
+          });
+        } else if (!selArr.length && clearBtn) {
+          clearBtn.remove();
+        }
+      }
+
+      function refreshOpts(filter) {
+        el.querySelectorAll('.cf-sel-opt').forEach(function(opt) {
+          var v = opt.dataset.val;
+          opt.classList.toggle('cf-sel-opt-active', selArr.indexOf(v) >= 0);
+          opt.style.display = filter && v.toLowerCase().indexOf(filter.toLowerCase()) < 0 ? 'none' : '';
+        });
+      }
+
+      // Open/close dropdown
       trigger.addEventListener('click', function(ev) {
         ev.stopPropagation();
         var isOpen = dropdown.style.display !== 'none';
         document.querySelectorAll('.cf-select-dropdown').forEach(function(d){ d.style.display = 'none'; });
-        dropdown.style.display = isOpen ? 'none' : 'block';
+        if (!isOpen) {
+          dropdown.style.display = 'block';
+          if (filterInput) { filterInput.value = ''; refreshOpts(''); filterInput.focus(); }
+        }
       });
+
+      // Filter input
+      if (filterInput) {
+        filterInput.addEventListener('input', function(ev) { ev.stopPropagation(); refreshOpts(filterInput.value); });
+        filterInput.addEventListener('click', function(ev) { ev.stopPropagation(); });
+      }
 
       // Option click
       el.querySelectorAll('.cf-sel-opt').forEach(function(opt) {
@@ -5259,8 +5268,7 @@ function renderDrawerCustomFields(cfValues, issueId, spaceId) {
             selArr = [v];
             dropdown.style.display = 'none';
           }
-          rebuildTrigger(el, selArr);
-          updateDropdownChecks(el, selArr);
+          refreshTrigger(); refreshOpts(filterInput ? filterInput.value : '');
           saveValue(selArr.join(','));
         });
       });

@@ -296,6 +296,28 @@
   <div class="footer-text">© 2026 Neutara Technologies. All rights reserved.</div>
 
 <script>
+  // Show OAuth error from URL param (e.g. ?error=user_not_found)
+  (function () {
+    var params = new URLSearchParams(window.location.search);
+    var err = params.get('error');
+    if (err) {
+      var msgs = {
+        'invalid_state': 'Security check failed. Please try again.',
+        'user_not_found': 'Your Microsoft account is not registered in this system. Please contact your administrator.',
+        'token_exchange_failed': 'Could not complete sign-in with Microsoft. Please try again.',
+        'no_email': 'Could not retrieve your email from Microsoft. Please try again.',
+        'access_denied': 'Sign-in was cancelled or denied.',
+        'account_deactivated': 'Your account has been deactivated. Please contact your administrator.',
+        'no_code': 'Sign-in was incomplete. Please try again.'
+      };
+      var el = document.getElementById('loginError');
+      if (el) {
+        el.textContent = msgs[err] || ('Sign-in error: ' + err);
+        el.classList.add('show');
+      }
+    }
+  })();
+
   // Check if already logged in — but skip redirect if this is an invite link
   (function () {
     var params = new URLSearchParams(window.location.search);

@@ -53,6 +53,14 @@ const pool = process.env.DATABASE_URL
   : new Pool({ host: 'localhost', port: 5432, database: 'sprintboard', user: 'postgres', password: 'postgres' });
 pool.on('error', (err) => { console.error('[pg pool error] Client lost connection:', err.message); });
 const q = (text, params) => pool.query(text, params);
+const https = require('https');
+
+// ── Microsoft OAuth2 state store (CSRF) ───────────────────
+const oauthStates = new Map(); // state → { createdAt }
+setInterval(() => {
+  const cutoff = Date.now() - 10 * 60 * 1000;
+  for (const [k, v] of oauthStates) if (v.createdAt < cutoff) oauthStates.delete(k);
+}, 10 * 60 * 1000);
 
 // ── Bulk Load ─────────────────────────────────────────────
 app.get('/api/data', requireAuth, wrap(async (req, res) => {
@@ -892,6 +900,130 @@ async function requireAuth(req, res, next) {
     next();
   } catch (e) { return res.status(401).json({ error: 'Auth error' }); }
 }
+
+// ── Microsoft OAuth2 config (set these env vars on the server) ────────────
+const MS_CLIENT_ID     = process.env.MICROSOFT_CLIENT_ID     || '';
+const MS_CLIENT_SECRET = process.env.MICROSOFT_CLIENT_SECRET || '';
+const MS_TENANT_ID     = process.env.MICROSOFT_TENANT_ID     || '';
+const MS_REDIRECT_URI  = process.env.MICROSOFT_REDIRECT_URI  || 'https://sprintboard.cftools.live/api/auth/callback/microsoft';
+
+// ── Microsoft OAuth2 helpers ──────────────────────────────
+function msTokenExchange(code) {
+  return new Promise((resolve, reject) => {
+    const body = new URLSearchParams({
+      client_id: MS_CLIENT_ID,
+      client_secret: MS_CLIENT_SECRET,
+      grant_type: 'authorization_code',
+      code,
+      redirect_uri: MS_REDIRECT_URI,
+      scope: 'openid profile email User.Read'
+    }).toString();
+    const opts = {
+      hostname: 'login.microsoftonline.com',
+      path: `/${MS_TENANT_ID}/oauth2/v2.0/token`,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(body) }
+    };
+    const req = https.request(opts, (r) => {
+      let data = '';
+      r.on('data', c => data += c);
+      r.on('end', () => { try { resolve(JSON.parse(data)); } catch { resolve(null); } });
+    });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+function msGraphMe(accessToken) {
+  return new Promise((resolve, reject) => {
+    const opts = {
+      hostname: 'graph.microsoft.com',
+      path: '/v1.0/me?$select=displayName,mail,userPrincipalName',
+      method: 'GET',
+      headers: { Authorization: `Bearer ${accessToken}` }
+    };
+    const req = https.request(opts, (r) => {
+      let data = '';
+      r.on('data', c => data += c);
+      r.on('end', () => { try { resolve(JSON.parse(data)); } catch { resolve(null); } });
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+// ── Microsoft OAuth2 routes ───────────────────────────────
+app.get('/auth/microsoft', (req, res) => {
+  const state = crypto.randomBytes(16).toString('hex');
+  oauthStates.set(state, { createdAt: Date.now() });
+  const params = new URLSearchParams({
+    client_id: MS_CLIENT_ID,
+    response_type: 'code',
+    redirect_uri: MS_REDIRECT_URI,
+    scope: 'openid profile email User.Read',
+    response_mode: 'query',
+    state
+  });
+  res.redirect(`https://login.microsoftonline.com/${MS_TENANT_ID}/oauth2/v2.0/authorize?${params}`);
+});
+
+app.get('/api/auth/callback/microsoft', wrap(async (req, res) => {
+  const { code, state, error } = req.query;
+
+  // Validate CSRF state
+  if (!state || !oauthStates.has(state)) {
+    return res.redirect('/login.html?error=invalid_state');
+  }
+  oauthStates.delete(state);
+
+  if (error) {
+    return res.redirect('/login.html?error=' + encodeURIComponent(error));
+  }
+  if (!code) {
+    return res.redirect('/login.html?error=no_code');
+  }
+
+  // Exchange code for access token
+  const tokenData = await msTokenExchange(code);
+  if (!tokenData || !tokenData.access_token) {
+    console.error('[MS OAuth] Token exchange failed:', tokenData);
+    return res.redirect('/login.html?error=token_exchange_failed');
+  }
+
+  // Get user profile from Microsoft Graph
+  const profile = await msGraphMe(tokenData.access_token);
+  if (!profile) {
+    return res.redirect('/login.html?error=no_email');
+  }
+
+  const email = (profile.mail || profile.userPrincipalName || '').toLowerCase().trim();
+  if (!email) {
+    return res.redirect('/login.html?error=no_email');
+  }
+
+  // Look up user in database
+  const userRows = await q('SELECT * FROM users WHERE LOWER(email)=$1', [email]);
+  if (!userRows.rows.length) {
+    console.error('[MS OAuth] User not found for email:', email);
+    return res.redirect('/login.html?error=user_not_found');
+  }
+  const user = userRows.rows[0];
+
+  if (user.is_active === false) {
+    return res.redirect('/login.html?error=account_deactivated');
+  }
+
+  // Create session
+  const sessionToken = generateToken();
+  const expires = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+  await q('INSERT INTO sessions(id,user_id,token,expires_at) VALUES($1,$2,$3,$4)',
+    [`ses-${uid()}`, user.id, sessionToken, expires]);
+  await q('UPDATE users SET last_login=NOW() WHERE id=$1', [user.id]);
+
+  // Redirect to app with token in URL param
+  res.redirect(`/?token=${sessionToken}`);
+}));
 
 // Public auth routes (no middleware)
 app.post('/api/auth/login', wrap(async (req, res) => {

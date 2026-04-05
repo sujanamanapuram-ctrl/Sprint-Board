@@ -1457,11 +1457,10 @@ body.light .drawer-sidebar { background: #f7f8fa; }
 .drawer-fields-table td.dfl { width: 110px; font-weight: 600; color: var(--text2); white-space: nowrap; padding-right: 12px; }
 .drawer-fields-table td.dfv { color: var(--text); }
 
-.drawer-select { width: 100%; padding: 5px 8px; background: var(--bg2); border: 1px solid transparent; border-radius: var(--radius); color: var(--text); font-size: 12px; cursor: pointer; }
-.drawer-select:hover { border-color: var(--border); background: var(--bg3); }
+.drawer-select { width: 100%; padding: 0; background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text); font-size: 12px; cursor: pointer; overflow-y: auto; }
+.drawer-select option { padding: 5px 8px; cursor: pointer; }
 .drawer-select:focus { border-color: var(--accent); outline: none; }
-body.light .drawer-select { background: #ffffff; }
-body.light .drawer-select:hover { background: #f0f2f5; }
+body.light .drawer-select { background: #ffffff; border-color: #d1dbe8; }
 
 .drawer-input { width: 100%; padding: 5px 8px; background: var(--bg2); border: 1px solid transparent; border-radius: var(--radius); color: var(--text); font-size: 12px; }
 .drawer-input:hover { border-color: var(--border); background: var(--bg3); }

@@ -340,12 +340,21 @@ function isFavorited(spaceId) {
 }
 
 function populateUserSelect(sel, members, selectedId) {
+  // Sort alphabetically by name, Unassigned always first
+  var sorted = members.slice().sort(function(a, b) {
+    return (a.name || '').localeCompare(b.name || '');
+  });
   var html = '<option value="">Unassigned</option>';
-  for (var i = 0; i < members.length; i++) {
-    var u = members[i];
+  for (var i = 0; i < sorted.length; i++) {
+    var u = sorted[i];
     html += '<option value="' + u.id + '"' + (u.id == selectedId ? ' selected' : '') + '>' + esc(u.name) + '</option>';
   }
   sel.innerHTML = html;
+  // Show scrollable list — cap at 8 visible rows so all members accessible via scroll
+  var total = sorted.length + 1; // +1 for Unassigned
+  sel.size = Math.min(total, 8);
+  sel.style.overflowY = total > 8 ? 'scroll' : 'auto';
+  sel.style.height = 'auto';
 }
 
 function populateSprintSelect(sel, sprints, selectedId) {

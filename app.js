@@ -350,11 +350,6 @@ function populateUserSelect(sel, members, selectedId) {
     html += '<option value="' + u.id + '"' + (u.id == selectedId ? ' selected' : '') + '>' + esc(u.name) + '</option>';
   }
   sel.innerHTML = html;
-  // Show scrollable list — cap at 8 visible rows so all members accessible via scroll
-  var total = sorted.length + 1; // +1 for Unassigned
-  sel.size = Math.min(total, 8);
-  sel.style.overflowY = total > 8 ? 'scroll' : 'auto';
-  sel.style.height = 'auto';
 }
 
 function populateSprintSelect(sel, sprints, selectedId) {

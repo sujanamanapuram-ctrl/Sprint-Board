@@ -1618,6 +1618,28 @@ app.post('/api/admin/sync-db', async (req, res) => {
       await pool.query(`ALTER TABLE issues ADD COLUMN IF NOT EXISTS fix_description TEXT`);
     } catch(e) { console.error('Migration warning (fix_description):', e.message); }
 
+    // Migration: add start_date, due_date, original_estimate to issues
+    try {
+      await pool.query(`ALTER TABLE issues ADD COLUMN IF NOT EXISTS start_date DATE`);
+      await pool.query(`ALTER TABLE issues ADD COLUMN IF NOT EXISTS due_date DATE`);
+      await pool.query(`ALTER TABLE issues ADD COLUMN IF NOT EXISTS original_estimate INTEGER`);
+    } catch(e) { console.error('Migration warning (issues dates/estimate):', e.message); }
+
+    // Migration: create notifications table
+    try {
+      await pool.query(`CREATE TABLE IF NOT EXISTS notifications (
+        id         VARCHAR PRIMARY KEY,
+        user_id    VARCHAR REFERENCES users(id) ON DELETE CASCADE,
+        space_id   VARCHAR REFERENCES spaces(id) ON DELETE SET NULL,
+        type       VARCHAR NOT NULL,
+        title      VARCHAR NOT NULL,
+        body       TEXT,
+        link       VARCHAR,
+        is_read    BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMP DEFAULT NOW()
+      )`);
+    } catch(e) { console.error('Migration warning (notifications):', e.message); }
+
     console.log('==================================================');
     console.log('  SprintBoard Server');
     console.log('  Database connected');

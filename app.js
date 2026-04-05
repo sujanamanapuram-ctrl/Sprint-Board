@@ -4875,15 +4875,6 @@ function bindDrawerEdits(issue) {
   };
   $('drawerStartDate').onchange = function () {
     var val = $('drawerStartDate').value;
-    if (val) {
-      var today = new Date(); today.setHours(0,0,0,0);
-      var picked = new Date(val + 'T00:00:00');
-      if (picked < today) {
-        toast('Start date cannot be in the past', 'error');
-        $('drawerStartDate').value = '';
-        return;
-      }
-    }
     autoSave('start_date', val || null);
   };
   $('drawerDueDate').onchange = function () {
@@ -6012,7 +6003,7 @@ function resetIssueForm() {
   $('issuePriority').value = 'medium';
   $('issuePoints').value = '';
   $('issueLabels').value = '';
-  $('issueStartDate').value = '';
+  $('issueStartDate').value = fmtDateISO(new Date()); // default to today
   $('issueDueDate').value = '';
   $('issueDescription').value = '';
   _selectedFiles = [];

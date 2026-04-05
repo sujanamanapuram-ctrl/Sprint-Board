@@ -4956,7 +4956,7 @@ function bindDrawerEdits(issue) {
     openModal('modal-worklog');
   };
 
-  // ⋯ Actions menu — Delete issue (owner only)
+  // ⋯ Actions menu — Move to board + Delete issue
   $('drawerActionsBtn').onclick = function (e) {
     e.stopPropagation();
     var existing = document.querySelector('.drawer-actions-menu');
@@ -4967,16 +4967,72 @@ function bindDrawerEdits(issue) {
     var menu = document.createElement('div');
     menu.className = 'drawer-actions-menu';
     menu.innerHTML = isOwner
-      ? '<div class="drawer-actions-item danger" id="drawerDeleteItem">🗑️ Delete issue</div>'
+      ? '<div class="drawer-actions-item" id="drawerMoveItem">📋 Move to another board</div>' +
+        '<div style="margin:2px 4px;border-top:1px solid var(--border)"></div>' +
+        '<div class="drawer-actions-item danger" id="drawerDeleteItem">🗑️ Delete issue</div>'
       : '<div class="drawer-actions-item disabled" style="color:var(--text3);font-size:12px">No actions available</div>';
 
     var rect = $('drawerActionsBtn').getBoundingClientRect();
     menu.style.cssText = 'position:fixed;right:' + (window.innerWidth - rect.right) + 'px;top:' + (rect.bottom + 4) + 'px;' +
-      'background:var(--bg2);border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.15);z-index:9999;min-width:160px;padding:4px;';
+      'background:var(--bg2);border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.15);z-index:9999;min-width:180px;padding:4px;';
 
     document.body.appendChild(menu);
 
     if (isOwner) {
+      // Move to another board
+      document.getElementById('drawerMoveItem').onclick = function () {
+        menu.remove();
+        // Build list of other spaces (boards) excluding current
+        var currentIssue = (S.data.issues || []).find(function(i){ return i.id === issueId; });
+        var currentSpaceId = currentIssue ? currentIssue.space_id : null;
+        var otherSpaces = (S.data.spaces || []).filter(function(sp){ return sp.id !== currentSpaceId; });
+
+        if (!otherSpaces.length) {
+          toast('No other boards available to move to', 'error');
+          return;
+        }
+
+        // Show board picker overlay
+        var overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:10000;display:flex;align-items:center;justify-content:center;';
+        var picker = document.createElement('div');
+        picker.style.cssText = 'background:var(--bg2);border-radius:12px;padding:24px;min-width:300px;max-width:400px;box-shadow:0 8px 32px rgba(0,0,0,0.25);';
+        picker.innerHTML = '<div style="font-weight:700;font-size:15px;margin-bottom:4px">Move to another board</div>' +
+          '<div style="font-size:12px;color:var(--text2);margin-bottom:16px">Select the destination board</div>' +
+          '<div id="boardPickerList" style="display:flex;flex-direction:column;gap:6px;max-height:300px;overflow-y:auto;"></div>' +
+          '<div style="margin-top:16px;display:flex;justify-content:flex-end;">' +
+          '<button id="boardPickerCancel" style="padding:7px 16px;border-radius:7px;border:1px solid var(--border);background:none;cursor:pointer;font-size:13px;">Cancel</button>' +
+          '</div>';
+        overlay.appendChild(picker);
+        document.body.appendChild(overlay);
+
+        var list = picker.querySelector('#boardPickerList');
+        otherSpaces.forEach(function(sp) {
+          var btn = document.createElement('button');
+          btn.style.cssText = 'width:100%;text-align:left;padding:10px 14px;border-radius:8px;border:1px solid var(--border);background:var(--bg);cursor:pointer;font-size:13px;font-weight:500;transition:background 0.15s;';
+          btn.textContent = sp.name;
+          btn.onmouseover = function(){ btn.style.background = 'var(--accent-light, #eff6ff)'; };
+          btn.onmouseout  = function(){ btn.style.background = 'var(--bg)'; };
+          btn.onclick = async function() {
+            overlay.remove();
+            try {
+              await api('/api/issues/' + issueId, 'PUT', { space_id: sp.id, sprint_id: null });
+              closeDrawer();
+              await refreshData();
+              if (S.currentTab) renderTab(S.currentTab);
+              toast('Issue moved to ' + sp.name);
+            } catch(err) {
+              toast('Failed to move issue', 'error');
+            }
+          };
+          list.appendChild(btn);
+        });
+
+        picker.querySelector('#boardPickerCancel').onclick = function(){ overlay.remove(); };
+        overlay.onclick = function(ev){ if (ev.target === overlay) overlay.remove(); };
+      };
+
+      // Delete issue
       document.getElementById('drawerDeleteItem').onclick = async function () {
         menu.remove();
         if (!confirm('Delete this issue? This cannot be undone.')) return;

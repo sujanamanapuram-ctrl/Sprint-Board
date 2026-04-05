@@ -5273,6 +5273,7 @@ window._submitSubtask = async function() {
       priority: 'medium',
       reporter_id: S.currentUser,
       assignee_id: parentIssue ? parentIssue.assignee_id : null,
+      start_date: fmtDateISO(new Date()),
       status: 'To Do'
     });
     toast('Subtask created');
@@ -6027,17 +6028,7 @@ function populateIssueFormSelects() {
 
 async function handleIssueSubmit(e) {
   e.preventDefault();
-  // Validate start date is not in the past
   var startVal = $('issueStartDate').value;
-  if (startVal) {
-    var today = new Date(); today.setHours(0,0,0,0);
-    var picked = new Date(startVal + 'T00:00:00');
-    if (picked < today) {
-      toast('Start date cannot be in the past', 'error');
-      $('issueStartDate').focus();
-      return;
-    }
-  }
   // Validate due date does not exceed sprint end date
   var dueVal = $('issueDueDate').value;
   if (dueVal) {

@@ -4912,6 +4912,109 @@ function bindDrawerEdits(issue) {
   // Expose pending to the global save handler (fallback)
   window._drawerPending = pending;
 
+  // ── @mention autocomplete ─────────────────────────────────
+  (function() {
+    var textarea = $('drawerCommentInput');
+    var dropdown = $('mentionDropdown');
+    var mentionStart = -1; // caret position where @ was typed
+
+    function getMembers() {
+      return window._drawerMembers || S.data.users || [];
+    }
+
+    function closeMention() {
+      dropdown.style.display = 'none';
+      mentionStart = -1;
+    }
+
+    function showMention(query) {
+      var members = getMembers().filter(function(m) {
+        return !query || m.name.toLowerCase().indexOf(query.toLowerCase()) !== -1;
+      });
+      if (!members.length) { closeMention(); return; }
+
+      // Position dropdown just below textarea
+      var rect = textarea.getBoundingClientRect();
+      dropdown.style.top = (textarea.offsetHeight + 2) + 'px';
+      dropdown.style.display = 'block';
+      dropdown.innerHTML = members.map(function(m) {
+        return '<div class="mention-item" data-id="' + m.id + '" data-name="' + m.name + '" ' +
+          'style="display:flex;align-items:center;gap:8px;padding:8px 12px;cursor:pointer;"' +
+          'onmouseenter="this.style.background=\'var(--bg3)\'" onmouseleave="this.style.background=\'\'">' +
+          '<div style="width:26px;height:26px;border-radius:50%;background:' + (m.color || '#6b7280') + ';display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#fff;flex-shrink:0">' +
+          initials(m.name) + '</div>' +
+          '<div>' +
+          '<div style="font-size:13px;font-weight:600">' + esc(m.name) + '</div>' +
+          (m.email ? '<div style="font-size:11px;color:var(--text2)">' + esc(m.email) + '</div>' : '') +
+          '</div></div>';
+      }).join('');
+
+      // Click to insert mention
+      dropdown.querySelectorAll('.mention-item').forEach(function(item) {
+        item.onclick = function() {
+          var name = item.dataset.name;
+          var val = textarea.value;
+          // Replace @query with @Name
+          var before = val.substring(0, mentionStart);
+          var after = val.substring(textarea.selectionStart);
+          textarea.value = before + '@' + name + ' ' + after;
+          // Move caret after inserted mention
+          var pos = mentionStart + name.length + 2;
+          textarea.setSelectionRange(pos, pos);
+          textarea.focus();
+          closeMention();
+        };
+      });
+    }
+
+    textarea.addEventListener('input', function() {
+      var val = textarea.value;
+      var caret = textarea.selectionStart;
+      // Find the @ that triggered this mention (scan backwards from caret)
+      var slice = val.substring(0, caret);
+      var atIdx = slice.lastIndexOf('@');
+      if (atIdx === -1) { closeMention(); return; }
+      // Only trigger if @ is at start of word (preceded by space, newline, or start of string)
+      var charBefore = slice[atIdx - 1];
+      if (atIdx > 0 && charBefore !== ' ' && charBefore !== '\n') { closeMention(); return; }
+      var query = slice.substring(atIdx + 1);
+      // If query has a space it means @mention was completed
+      if (query.indexOf(' ') !== -1) { closeMention(); return; }
+      mentionStart = atIdx;
+      showMention(query);
+    });
+
+    textarea.addEventListener('keydown', function(e) {
+      if (dropdown.style.display === 'none') return;
+      var items = dropdown.querySelectorAll('.mention-item');
+      var active = dropdown.querySelector('.mention-item.focused');
+      var idx = Array.prototype.indexOf.call(items, active);
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        if (active) active.classList.remove('focused');
+        var next = items[idx + 1] || items[0];
+        next.classList.add('focused');
+        next.style.background = 'var(--bg3)';
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (active) active.classList.remove('focused');
+        var prev = items[idx - 1] || items[items.length - 1];
+        prev.classList.add('focused');
+        prev.style.background = 'var(--bg3)';
+      } else if (e.key === 'Enter' && active) {
+        e.preventDefault();
+        active.click();
+      } else if (e.key === 'Escape') {
+        closeMention();
+      }
+    });
+
+    // Close if clicking outside
+    document.addEventListener('click', function(e) {
+      if (!dropdown.contains(e.target) && e.target !== textarea) closeMention();
+    });
+  })();
+
   $('drawerCommentSubmit').onclick = async function () {
     var body = $('drawerCommentInput').value.trim();
     if (!body && !_commentFiles.length) return;

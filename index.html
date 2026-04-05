@@ -611,8 +611,10 @@
                 </div>
                 <div id="drawerCommentBox" class="drawer-comment-box">
                   <div id="drawerCommentAvatar" class="drawer-comment-avatar"></div>
-                  <div class="drawer-comment-form">
-                    <textarea id="drawerCommentInput" class="input" placeholder="Add a comment..." rows="2"></textarea>
+                  <div class="drawer-comment-form" style="position:relative">
+                    <textarea id="drawerCommentInput" class="input" placeholder="Add a comment... (type @ to mention someone)" rows="2"></textarea>
+                    <!-- @mention dropdown -->
+                    <div id="mentionDropdown" style="display:none;position:absolute;left:0;right:0;background:var(--bg2);border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.15);z-index:9999;max-height:200px;overflow-y:auto;"></div>
                     <div id="drawerCommentFileList" class="comment-file-list"></div>
                     <div class="drawer-comment-actions">
                       <label class="btn btn-outline btn-sm comment-attach-btn" title="Attach file (max 500 MB)">

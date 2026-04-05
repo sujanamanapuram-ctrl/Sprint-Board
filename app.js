@@ -4741,12 +4741,12 @@ async function openDrawer(issueId) {
   renderDrawerLinks(issue);
 
   renderDrawerSubtasks(issue.subtasks || []);
-  // Reset to "All" tab on open, sync data-active-tab attribute
+  // Reset to "Comments" tab on open, sync data-active-tab attribute
   document.querySelectorAll('[data-activity-tab]').forEach(function(t){
-    t.classList.toggle('active', t.dataset.activityTab === 'all');
+    t.classList.toggle('active', t.dataset.activityTab === 'comments');
   });
   var actBody = $('activitySectionBody');
-  if (actBody) actBody.dataset.activeTab = 'all';
+  if (actBody) actBody.dataset.activeTab = 'comments';
   renderDrawerActivity(issue);
   renderDrawerCustomFields(issue.custom_field_values || [], issue.id, issue.space_id || S.currentSpace);
   renderDrawerAttachments(issue.attachments || []);
@@ -5407,7 +5407,7 @@ function renderDrawerActivity(issue) {
   // Support legacy call with just comments array
   if (Array.isArray(issue)) issue = { comments: issue, history: [], worklogs: [] };
   _drawerIssueData = issue;
-  var activeTab = (document.querySelector('.drawer-atab.active') || {}).dataset && document.querySelector('.drawer-atab.active').dataset.activityTab || 'all';
+  var activeTab = (document.querySelector('.drawer-atab.active') || {}).dataset && document.querySelector('.drawer-atab.active').dataset.activityTab || 'comments';
   _renderActivityTab(activeTab, issue);
 }
 
@@ -5498,9 +5498,9 @@ function _renderActivityTab(tab, issue) {
       '</div></div>';
   }
 
-  // Comment box: show only on Comments + All tabs
+  // Comment box: show only on Comments tab
   var commentBox = document.querySelector('.drawer-comment-box');
-  if (commentBox) commentBox.style.display = (tab === 'comments' || tab === 'all') ? '' : 'none';
+  if (commentBox) commentBox.style.display = (tab === 'comments') ? '' : 'none';
 
   // Helper: merge items into sorted timeline
   function buildTimeline(items) {

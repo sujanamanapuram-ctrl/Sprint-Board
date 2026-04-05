@@ -4966,17 +4966,48 @@ function bindDrawerEdits(issue) {
 
     var menu = document.createElement('div');
     menu.className = 'drawer-actions-menu';
+    // Member quick actions always shown; Move/Delete for owner/admin only
+    var memberActions =
+      '<div class="drawer-actions-item" id="drawerQuickAssignItem">👤 Assign to me</div>' +
+      '<div class="drawer-actions-item" id="drawerQuickSubtaskItem">📌 Add subtask</div>' +
+      '<div class="drawer-actions-item" id="drawerQuickLinkItem">🔗 Link an issue</div>';
     menu.innerHTML = isOwner
-      ? '<div class="drawer-actions-item" id="drawerMoveItem">📋 Move to another board</div>' +
+      ? memberActions +
+        '<div style="margin:2px 4px;border-top:1px solid var(--border)"></div>' +
+        '<div class="drawer-actions-item" id="drawerMoveItem">📋 Move to another board</div>' +
         '<div style="margin:2px 4px;border-top:1px solid var(--border)"></div>' +
         '<div class="drawer-actions-item danger" id="drawerDeleteItem">🗑️ Delete issue</div>'
-      : '<div class="drawer-actions-item disabled" style="color:var(--text3);font-size:12px">No actions available</div>';
+      : memberActions;
 
     var rect = $('drawerActionsBtn').getBoundingClientRect();
     menu.style.cssText = 'position:fixed;right:' + (window.innerWidth - rect.right) + 'px;top:' + (rect.bottom + 4) + 'px;' +
       'background:var(--bg2);border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.15);z-index:9999;min-width:180px;padding:4px;';
 
     document.body.appendChild(menu);
+
+    // ── Member quick actions (visible to all roles) ──────────
+    document.getElementById('drawerQuickAssignItem').onclick = function () {
+      menu.remove();
+      // Assign current user to this issue
+      var assignee = $('drawerAssignee');
+      if (assignee && S.currentUser) {
+        assignee.value = S.currentUser;
+        assignee.dispatchEvent(new Event('change'));
+        toast('Assigned to you');
+      }
+    };
+
+    document.getElementById('drawerQuickSubtaskItem').onclick = function () {
+      menu.remove();
+      // Scroll to subtasks section and click Add subtask
+      window._showSubtaskInput();
+    };
+
+    document.getElementById('drawerQuickLinkItem').onclick = function () {
+      menu.remove();
+      // Show the link dialog
+      window._showLinkDialog();
+    };
 
     if (isOwner) {
       // Move to another board

@@ -260,15 +260,32 @@ app.post('/api/sprints/:id/start', wrap(async (req, res) => {
     [sprint.space_id, sprint.id]);
   if (active.rows.length) return res.status(400).json({ error: 'Another sprint is already active in this space' });
   const r = await q("UPDATE sprints SET status='active' WHERE id=$1 RETURNING *", [req.params.id]);
+  // Notify all space members
+  const members = await q('SELECT user_id FROM space_members WHERE space_id=$1', [sprint.space_id]);
+  members.rows.forEach(function(m) {
+    createNotif({ user_id: m.user_id, space_id: sprint.space_id, type: 'sprint_started',
+      title: sprint.name + ' has started',
+      body: 'Sprint is now active. Time to get to work!' });
+  });
   res.json(r.rows[0]);
 }));
 
 app.post('/api/sprints/:id/complete', wrap(async (req, res) => {
   const sid = req.params.id;
+  const sprint = (await q('SELECT * FROM sprints WHERE id=$1', [sid])).rows[0];
   const done = await q("SELECT COALESCE(SUM(story_points),0)::int AS pts FROM issues WHERE sprint_id=$1 AND status='Done'", [sid]);
   await q("UPDATE sprints SET status='completed',velocity=$2 WHERE id=$1", [sid, done.rows[0].pts]);
   await q("UPDATE issues SET sprint_id=NULL WHERE sprint_id=$1 AND status!='Done'", [sid]);
   const r = await q('SELECT * FROM sprints WHERE id=$1', [sid]);
+  // Notify all space members
+  if (sprint) {
+    const members = await q('SELECT user_id FROM space_members WHERE space_id=$1', [sprint.space_id]);
+    members.rows.forEach(function(m) {
+      createNotif({ user_id: m.user_id, space_id: sprint.space_id, type: 'sprint_completed',
+        title: sprint.name + ' has been completed',
+        body: 'Sprint completed with ' + done.rows[0].pts + ' story points.' });
+    });
+  }
   res.json(r.rows[0]);
 }));
 
@@ -365,6 +382,7 @@ app.put('/api/issues/:id', requireAuth, wrap(async (req, res) => {
   const oldRow = (await q('SELECT * FROM issues WHERE id=$1', [req.params.id])).rows[0];
   const set = keys.map((k, i) => `${k}=$${i + 2}`).join(',');
   const r = await q(`UPDATE issues SET ${set},updated_at=NOW() WHERE id=$1 RETURNING *`, [req.params.id, ...vals]);
+  const newRow = r.rows[0];
   // Record history for each changed field
   const TRACKED = ['title','status','priority','assignee_id','reporter_id','sprint_id','labels','story_points','start_date','due_date','description','fix_description'];
   if (oldRow) {
@@ -377,8 +395,30 @@ app.put('/api/issues/:id', requireAuth, wrap(async (req, res) => {
           [uid(), req.params.id, req.user.user_id, key, oldVal, newVal]).catch(()=>{});
       }
     }
+    const actor = req.user.user_id;
+    const issueKey = oldRow.key || req.params.id;
+    const spaceId = oldRow.space_id;
+    const link = '/?' + issueKey;
+    // Notify new assignee when assignee_id changes
+    if (keys.includes('assignee_id') && req.body.assignee_id && req.body.assignee_id !== oldRow.assignee_id) {
+      const newAssignee = req.body.assignee_id;
+      if (newAssignee !== actor) {
+        createNotif({ user_id: newAssignee, space_id: spaceId, type: 'issue_assigned',
+          title: 'You were assigned to ' + issueKey,
+          body: oldRow.title, link });
+      }
+    }
+    // Notify assignee when status changes
+    if (keys.includes('status') && req.body.status !== oldRow.status) {
+      const assignee = newRow.assignee_id;
+      if (assignee && assignee !== actor) {
+        createNotif({ user_id: assignee, space_id: spaceId, type: 'status_changed',
+          title: issueKey + ' status changed to ' + req.body.status,
+          body: oldRow.title, link });
+      }
+    }
   }
-  res.json(r.rows[0]);
+  res.json(newRow);
 }));
 
 app.delete('/api/issues/:id', wrap(async (req, res) => {
@@ -413,6 +453,21 @@ app.post('/api/comments', wrap(async (req, res) => {
   const { issue_id, user_id, body } = req.body;
   const r = await q('INSERT INTO comments(id,issue_id,user_id,body) VALUES($1,$2,$3,$4) RETURNING *',
     [uid(), issue_id, user_id, body]);
+  // Notify assignee and reporter (skip commenter)
+  const issue = (await q('SELECT * FROM issues WHERE id=$1', [issue_id])).rows[0];
+  if (issue) {
+    const commenter = user_id;
+    const link = '/?' + (issue.key || issue_id);
+    const preview = body.length > 80 ? body.slice(0, 80) + '…' : body;
+    const notifyUsers = new Set([issue.assignee_id, issue.reporter_id].filter(Boolean));
+    notifyUsers.forEach(function(uid_) {
+      if (uid_ !== commenter) {
+        createNotif({ user_id: uid_, space_id: issue.space_id, type: 'comment_added',
+          title: 'New comment on ' + (issue.key || issue_id),
+          body: preview, link });
+      }
+    });
+  }
   res.status(201).json(r.rows[0]);
 }));
 
@@ -856,10 +911,33 @@ app.get('/api/reports/cycle-time', requireAuth, wrap(async (req, res) => {
 }));
 
 // ── Notifications ─────────────────────────────────────────
+
+// Helper: create a notification (fire-and-forget, never throws)
+async function createNotif({ user_id, space_id, type, title, body, link }) {
+  if (!user_id) return;
+  try {
+    await q('INSERT INTO notifications(id,user_id,space_id,type,title,body,link) VALUES($1,$2,$3,$4,$5,$6,$7)',
+      [uid(), user_id, space_id || null, type, title, body || null, link || null]);
+  } catch(e) { /* non-fatal */ }
+}
+
 app.get('/api/notifications', wrap(async (req, res) => {
-  const r = await q('SELECT * FROM notifications WHERE user_id=$1 ORDER BY is_read ASC, created_at DESC',
+  const r = await q('SELECT * FROM notifications WHERE user_id=$1 ORDER BY is_read ASC, created_at DESC LIMIT 100',
     [req.query.user_id]);
   res.json(r.rows);
+}));
+
+app.post('/api/notifications', requireAuth, wrap(async (req, res) => {
+  const { user_id, space_id, type, title, body, link } = req.body;
+  if (!user_id || !type || !title) return res.status(400).json({ error: 'user_id, type, title required' });
+  const r = await q('INSERT INTO notifications(id,user_id,space_id,type,title,body,link) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *',
+    [uid(), user_id, space_id || null, type, title, body || null, link || null]);
+  res.status(201).json(r.rows[0]);
+}));
+
+app.delete('/api/notifications/:id', requireAuth, wrap(async (req, res) => {
+  await q('DELETE FROM notifications WHERE id=$1 AND user_id=$2', [req.params.id, req.user.user_id]);
+  res.json({ ok: true });
 }));
 
 app.put('/api/notifications/:id/read', wrap(async (req, res) => {

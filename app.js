@@ -6224,8 +6224,26 @@ async function loadNotifications() {
   }
 }
 
+// Map notification type → pref key
+var _notifTypeMap = {
+  'issue_assigned': 'issue_assigned',
+  'status_changed': 'status_changed',
+  'comment_added':  'comment_added',
+  'sprint_started': 'sprint_started',
+  'sprint_completed': 'sprint_started', // same toggle as sprint_started
+  'mention': 'comment_added'            // mentions follow comment pref
+};
+
+function _filterNotifsByPrefs(notifs) {
+  return notifs.filter(function(n) {
+    var prefKey = _notifTypeMap[n.type];
+    if (!prefKey) return true; // unknown types always shown
+    return _notifPrefEnabled(prefKey);
+  });
+}
+
 function renderNotifBadge() {
-  var notifs = S.data.notifications || [];
+  var notifs = _filterNotifsByPrefs(S.data.notifications || []);
   var unread = 0;
   for (var i = 0; i < notifs.length; i++) {
     if (!notifs[i].is_read) unread++;
@@ -6239,20 +6257,34 @@ function renderNotifBadge() {
   }
 }
 
+var _notifTypeIcon = {
+  'issue_assigned': '👤',
+  'status_changed': '🔄',
+  'comment_added':  '💬',
+  'sprint_started': '🚀',
+  'sprint_completed': '✅',
+  'mention': '@'
+};
+
 function renderNotifPanel() {
-  var notifs = S.data.notifications || [];
+  var notifs = _filterNotifsByPrefs(S.data.notifications || []);
   if (!notifs.length) {
     $('notifList').innerHTML = '<p class="text-muted" style="padding:1rem">No notifications</p>';
     return;
   }
   var sorted = notifs.slice().sort(function (a, b) { return new Date(b.created_at) - new Date(a.created_at); });
   var html = '';
-  var limit = Math.min(sorted.length, 20);
+  var limit = Math.min(sorted.length, 30);
   for (var i = 0; i < limit; i++) {
     var n = sorted[i];
-    html += '<div class="notif-item' + (n.is_read ? '' : ' notif-unread') + '" onclick="window._markNotifRead(\'' + n.id + '\')">' +
-      '<div class="notif-text">' + esc(n.message || n.title || 'Notification') + '</div>' +
-      '<div class="text-muted">' + relativeTime(n.created_at) + '</div></div>';
+    var icon = _notifTypeIcon[n.type] || '🔔';
+    html += '<div class="notif-item' + (n.is_read ? '' : ' notif-unread') + '" onclick="window._markNotifRead(\'' + n.id + '\')" style="display:flex;gap:10px;align-items:flex-start">' +
+      '<span style="font-size:16px;flex-shrink:0;margin-top:2px">' + icon + '</span>' +
+      '<div style="flex:1;min-width:0">' +
+      '<div class="notif-text" style="font-weight:' + (n.is_read ? '400' : '600') + '">' + esc(n.title || 'Notification') + '</div>' +
+      (n.body ? '<div style="font-size:11px;color:var(--text2);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(n.body) + '</div>' : '') +
+      '<div class="text-muted" style="font-size:11px;margin-top:2px">' + relativeTime(n.created_at) + '</div>' +
+      '</div></div>';
   }
   $('notifList').innerHTML = html;
 }
@@ -6824,7 +6856,22 @@ function renderAdminSecurity(el) {
 }
 
 // ── Notifications ────────────────────────────────────────
+// Load/save notification preferences from localStorage
+function _getNotifPrefs() {
+  try { return JSON.parse(localStorage.getItem('sb_notif_prefs') || '{}'); } catch { return {}; }
+}
+function _saveNotifPrefs(prefs) {
+  localStorage.setItem('sb_notif_prefs', JSON.stringify(prefs));
+}
+function _notifPrefEnabled(type) {
+  var prefs = _getNotifPrefs();
+  return prefs[type] !== false; // default ON if not set
+}
+
 function renderAdminNotifications(el) {
+  var prefs = _getNotifPrefs();
+  var chk = function(key) { return prefs[key] !== false ? 'checked' : ''; };
+
   el.innerHTML =
     '<div class="admin-section-header">' +
     '<h2>🔔 Notifications</h2>' +
@@ -6835,19 +6882,19 @@ function renderAdminNotifications(el) {
     '<h3>In-App Notifications</h3>' +
     '<div class="admin-field-row">' +
     '<div><div class="admin-field-label">Issue Assigned</div><div class="admin-field-desc">Notify when an issue is assigned to a user</div></div>' +
-    '<label class="toggle-switch"><input type="checkbox" checked><span class="toggle-slider"></span></label>' +
+    '<label class="toggle-switch"><input type="checkbox" id="notifPrefAssigned" ' + chk('issue_assigned') + '><span class="toggle-slider"></span></label>' +
     '</div>' +
     '<div class="admin-field-row">' +
     '<div><div class="admin-field-label">Issue Status Changed</div><div class="admin-field-desc">Notify when issue status is updated</div></div>' +
-    '<label class="toggle-switch"><input type="checkbox" checked><span class="toggle-slider"></span></label>' +
+    '<label class="toggle-switch"><input type="checkbox" id="notifPrefStatus" ' + chk('status_changed') + '><span class="toggle-slider"></span></label>' +
     '</div>' +
     '<div class="admin-field-row">' +
     '<div><div class="admin-field-label">Comment Added</div><div class="admin-field-desc">Notify on new comments</div></div>' +
-    '<label class="toggle-switch"><input type="checkbox" checked><span class="toggle-slider"></span></label>' +
+    '<label class="toggle-switch"><input type="checkbox" id="notifPrefComment" ' + chk('comment_added') + '><span class="toggle-slider"></span></label>' +
     '</div>' +
     '<div class="admin-field-row">' +
     '<div><div class="admin-field-label">Sprint Started / Completed</div><div class="admin-field-desc">Notify on sprint lifecycle events</div></div>' +
-    '<label class="toggle-switch"><input type="checkbox" checked><span class="toggle-slider"></span></label>' +
+    '<label class="toggle-switch"><input type="checkbox" id="notifPrefSprint" ' + chk('sprint_started') + '><span class="toggle-slider"></span></label>' +
     '</div>' +
     '</div>' +
 
@@ -6862,6 +6909,23 @@ function renderAdminNotifications(el) {
     '<label class="toggle-switch"><input type="checkbox" disabled><span class="toggle-slider"></span></label>' +
     '</div>' +
     '</div>';
+
+  // Wire toggles to save prefs
+  function wireToggle(elId, prefKey, linked) {
+    var el = document.getElementById(elId);
+    if (!el) return;
+    el.onchange = function() {
+      var p = _getNotifPrefs();
+      p[prefKey] = el.checked;
+      if (linked) linked.forEach(function(k) { p[k] = el.checked; });
+      _saveNotifPrefs(p);
+      toast((el.checked ? 'Enabled: ' : 'Disabled: ') + el.closest('.admin-field-row').querySelector('.admin-field-label').textContent);
+    };
+  }
+  wireToggle('notifPrefAssigned', 'issue_assigned');
+  wireToggle('notifPrefStatus',   'status_changed');
+  wireToggle('notifPrefComment',  'comment_added');
+  wireToggle('notifPrefSprint',   'sprint_started', ['sprint_completed']);
 }
 
 // ── Users (Admin) ─────────────────────────────────────────

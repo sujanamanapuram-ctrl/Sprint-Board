@@ -3959,7 +3959,7 @@ function renderAllWork() {
           case 'sprint':          cell = '<td onclick="' + nav + '">' + (sprint ? esc(sprint.name) : '\u2014') + '</td>'; break;
           case 'story_points':    cell = '<td onclick="' + nav + '">' + (iss.story_points != null ? iss.story_points : '\u2014') + '</td>'; break;
           case 'due_date':        cell = '<td onclick="' + nav + '">' + (fmtDateShort(iss.due_date) || '\u2014') + '</td>'; break;
-          case 'updated_at':      cell = '<td class="text-muted" onclick="' + nav + '">' + relativeTime(iss.updated_at) + '</td>'; break;
+          case 'updated_at':      cell = '<td class="text-muted" onclick="' + nav + '" style="white-space:nowrap">' + fmtDateTime(iss.updated_at) + '</td>'; break;
           case 'start_date':      cell = '<td onclick="' + nav + '">' + (fmtDateShort(iss.start_date) || '\u2014') + '</td>'; break;
           case 'created_at':      cell = '<td onclick="' + nav + '">' + (fmtDateShort(iss.created_at) || '\u2014') + '</td>'; break;
           case 'reporter':        cell = '<td onclick="' + nav + '">' + (reporter ? esc(reporter.name) : '\u2014') + '</td>'; break;

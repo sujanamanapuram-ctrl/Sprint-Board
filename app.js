@@ -1582,13 +1582,16 @@ function _prmTimelineView(items, groupBy, zoom) {
             'onclick="event.stopPropagation();window._prmOpenModal(\'' + r.id + '\')" ' +
             'onmouseenter="window._prmShowTip(\'' + tipData + '\',event)" onmouseleave="window._prmHideTip()">◆</div>';
         } else {
-          html += '<div class="prm-sl-bar-wrap" style="left:' + lp.toFixed(3) + '%;top:' + topPx + 'px;width:calc(' + wp.toFixed(3) + '% + 220px)">' +
-            '<div class="prm-sl-bar" style="width:' + wp.toFixed(3) + '%;background:' + bc + '" ' +
+          // Bar: left% and width% are both relative to the timeline cell (totalMs span) — no wrapper offset error
+          html += '<div class="prm-sl-bar" ' +
+            'style="position:absolute;left:' + lp.toFixed(3) + '%;top:' + topPx + 'px;width:' + wp.toFixed(3) + '%;background:' + bc + '" ' +
             'onclick="event.stopPropagation();window._prmOpenModal(\'' + r.id + '\')" ' +
             'onmouseenter="window._prmShowTip(\'' + tipData + '\',event)" onmouseleave="window._prmHideTip()">' +
             '</div>' +
-            '<span class="prm-sl-bar-ext-lbl">' + esc(r.title) + '</span>' +
-            '</div>';
+            // Label: starts right after the bar end, also % of timeline cell
+            '<span class="prm-sl-bar-ext-lbl" ' +
+            'style="position:absolute;left:calc(' + lp.toFixed(3) + '% + ' + wp.toFixed(3) + '% + 4px);top:' + (topPx + 2) + 'px">' +
+            esc(r.title) + '</span>';
         }
       });
 

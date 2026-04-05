@@ -3059,14 +3059,11 @@ body.light .user-footer-actions .btn-icon:hover { color: #fff; background: rgba(
 .prm-sl-cur-mo-bg { position:absolute; top:0; bottom:0; background:rgba(77,144,224,.06); pointer-events:none; z-index:0; }
 .prm-sl-mo-div { position:absolute; top:0; bottom:0; width:1px; background:var(--border); opacity:.6; pointer-events:none; z-index:0; }
 
-/* Bars */
-/* Bar wrapper (holds bar + optional external label) */
-.prm-sl-bar-wrap { position:absolute; display:flex; align-items:center; pointer-events:none; z-index:2; }
-.prm-sl-bar-wrap:hover { z-index:10; }
-.prm-sl-bar { height:20px; border-radius:4px; cursor:pointer; opacity:.88; transition:opacity .15s,box-shadow .15s; min-width:4px; pointer-events:all; flex-shrink:0; }
-.prm-sl-bar:hover { opacity:1; box-shadow:0 2px 10px rgba(0,0,0,.25); }
-/* Label always shown to the right of the bar */
-.prm-sl-bar-ext-lbl { font-size:11px; font-weight:600; color:var(--text); white-space:nowrap; padding-left:6px; pointer-events:none; overflow:hidden; text-overflow:ellipsis; max-width:200px; }
+/* Bars — positioned absolutely inside the timeline cell; left/width are % of cell width */
+.prm-sl-bar { position:absolute; height:20px; border-radius:4px; cursor:pointer; opacity:.88; transition:opacity .15s,box-shadow .15s; min-width:4px; pointer-events:all; z-index:2; }
+.prm-sl-bar:hover { opacity:1; box-shadow:0 2px 10px rgba(0,0,0,.25); z-index:10; }
+/* Label sits to the right of the bar end; also positioned absolutely via inline left:calc(lp%+wp%+4px) */
+.prm-sl-bar-ext-lbl { position:absolute; font-size:11px; font-weight:600; color:var(--text); white-space:nowrap; pointer-events:none; overflow:hidden; text-overflow:ellipsis; max-width:200px; z-index:3; }
 
 /* Milestone diamond */
 .prm-sl-milestone { position:absolute; font-size:16px; transform:translateX(-50%); cursor:pointer; z-index:2; line-height:1; }
